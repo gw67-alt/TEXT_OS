@@ -1,3 +1,4 @@
+
 #if !defined(__cplusplus)
 #include <stdbool.h> /* C doesn't have booleans by default. */
 #endif
@@ -344,7 +345,7 @@ void init_pic() {
 /* The keyboard handler C function */
 void keyboard_handler() {
 
-    terminal_putentryat('TEXT_OS', make_color(COLOR_RED, COLOR_BLACK), 79, 0);
+    terminal_putentryat('X', make_color(COLOR_RED, COLOR_BLACK), 79, 0);
     /* Read scancode from keyboard data port */
     uint8_t scancode = inb(0x60);
     

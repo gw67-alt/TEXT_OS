@@ -346,9 +346,6 @@ void keyboard_handler() {
     /* Read scancode from keyboard data port */
     uint8_t scancode = inb(0x60);
     
-    /* Visual indicator for debug */
-    terminal_putentryat('K', make_color(COLOR_RED, COLOR_BLACK), 79, 0);
-    
     /* Handle key press (not release) */
     if (scancode < 128) {
         char key = scancode_to_ascii[scancode];

@@ -1,4 +1,3 @@
-
 #if !defined(__cplusplus)
 #include <stdbool.h> /* C doesn't have booleans by default. */
 #endif
@@ -15,6 +14,8 @@
 #if !defined(__i386__)
 #error "This tutorial needs to be compiled with a ix86-elf compiler"
 #endif
+
+#define SCREEN_BACKUP_SIZE (80 * 25)  // Hardcoded VGA dimensions
 
 /* Hardware text mode color constants. */
 enum vga_color {
@@ -53,6 +54,15 @@ size_t strlen(const char* str) {
     return ret;
 }
 
+/* Compare two strings */
+bool strcmp(const char* s1, const char* s2) {
+    while (*s1 && (*s1 == *s2)) {
+        s1++;
+        s2++;
+    }
+    return *s1 == *s2;
+}
+
 static const size_t VGA_WIDTH = 80;
 static const size_t VGA_HEIGHT = 25;
 
@@ -62,6 +72,17 @@ uint8_t terminal_color;
 uint16_t* terminal_buffer;
 bool cursor_visible = true;  // Cursor visibility state
 uint32_t cursor_blink_counter = 0;  // Counter for cursor blinking
+
+/* Screen locking variables */
+bool screen_locked = false;
+char current_password[20] = "admin123";  // Default password
+char input_password[20] = {0};
+size_t password_index = 0;
+bool password_mode = false;  // True when entering or changing password
+bool changing_password = false;
+char new_password[20] = {0};
+size_t new_password_index = 0;
+uint16_t screen_backup[SCREEN_BACKUP_SIZE]; // To store screen content when locked
 
 /* I/O port functions */
 static inline uint8_t inb(uint16_t port) {
@@ -97,6 +118,18 @@ void enable_hardware_cursor(uint8_t cursor_start, uint8_t cursor_end) {
 void disable_hardware_cursor() {
     outb(0x3D4, 0x0A);  // Cursor start register
     outb(0x3D5, 0x20);  // Bit 5 disables the cursor
+}
+
+void clear_screen() {
+    for (size_t y = 0; y < VGA_HEIGHT; y++) {
+        for (size_t x = 0; x < VGA_WIDTH; x++) {
+            const size_t index = y * VGA_WIDTH + x;
+            terminal_buffer[index] = make_vgaentry(' ', terminal_color);
+        }
+    }
+    terminal_row = 0;
+    terminal_column = 0;
+    update_hardware_cursor(terminal_column, terminal_row);
 }
 
 void terminal_initialize() {
@@ -183,6 +216,277 @@ void update_cursor_state() {
     }
 }
 
+/* Backup the current screen content */
+void backup_screen() {
+    for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) {
+        screen_backup[i] = terminal_buffer[i];
+    }
+}
+
+/* Restore the backed-up screen content */
+void restore_screen() {
+    for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) {
+        terminal_buffer[i] = screen_backup[i];
+    }
+}
+
+/* Lock the screen - display locked message */
+void lock_screen() {
+    if (!screen_locked) {
+        backup_screen();
+        screen_locked = true;
+        clear_screen();
+        
+        // Display lock message with nice styling
+        terminal_row = 10;
+        terminal_column = 30;
+        uint8_t lock_color = make_color(COLOR_WHITE, COLOR_BLUE);
+        
+        // Draw lock box
+        for (size_t y = 9; y < 16; y++) {
+            for (size_t x = 20; x < 60; x++) {
+                terminal_putentryat(' ', lock_color, x, y);
+            }
+        }
+        
+        // Display lock message
+        terminal_row = 10;
+        terminal_column = 30;
+        for (size_t i = 0; i < strlen("SCREEN LOCKED"); i++) {
+            terminal_putentryat("SCREEN LOCKED"[i], lock_color, terminal_column++, terminal_row);
+        }
+        
+        terminal_row = 12;
+        terminal_column = 22;
+        terminal_color = lock_color;
+        terminal_writestring("Enter password to unlock:");
+        
+        terminal_row = 14;
+        terminal_column = 22;
+        password_index = 0;
+        password_mode = true;
+        for (size_t i = 0; i < 20; i++) {
+            input_password[i] = 0;
+        }
+        
+        update_hardware_cursor(terminal_column, terminal_row);
+    }
+}
+
+/* Unlock the screen if password is correct */
+/* Unlock the screen if password is correct */
+void attempt_unlock() {
+    if (strcmp(input_password, current_password)) {
+        // Password correct
+        screen_locked = false;
+        password_mode = false;
+        restore_screen();
+        
+        // Reset terminal color to original
+        terminal_color = make_color(COLOR_LIGHT_GREY, COLOR_BLACK);
+        
+        // Make sure cursor is visible
+        cursor_visible = true;
+        enable_hardware_cursor(14, 15);
+        
+        // Update hardware cursor to match restored position
+        update_hardware_cursor(terminal_column, terminal_row);
+    } else {
+        // Password incorrect - clear the input field and try again
+        // Password incorrect - clear the input field and try again
+        terminal_row = 14;
+        terminal_column = 22;
+        for (size_t i = 0; i < 20; i++) {
+            terminal_putentryat(' ', terminal_color, terminal_column + i, terminal_row);
+            input_password[i] = 0;
+        }
+        terminal_column = 22;
+        password_index = 0;
+        
+        // Show error message
+        terminal_row = 16;
+        terminal_column = 22;
+        uint8_t error_color = make_color(COLOR_RED, COLOR_BLUE);
+        for (size_t i = 0; i < strlen("Incorrect password!"); i++) {
+            terminal_putentryat("Incorrect password!"[i], error_color, terminal_column++, terminal_row);
+        }
+        
+        terminal_row = 14;
+        terminal_column = 22;
+        update_hardware_cursor(terminal_column, terminal_row);
+    }
+}
+/* Additional password change security variables */
+bool verify_current_password = true;  // First step: verify current password
+bool enter_new_password = false;      // Second step: enter new password
+char verify_password[20] = {0};       // Buffer for current password verification
+size_t verify_password_index = 0;     // Index for verify password buffer
+
+/* Change password mode handler - updated for 2-step verification */
+void start_change_password() {
+    clear_screen();
+    
+    uint8_t dialog_color = make_color(COLOR_WHITE, COLOR_GREEN);
+    
+    // Draw dialog box
+    for (size_t y = 9; y < 16; y++) {
+        for (size_t x = 20; x < 60; x++) {
+            terminal_putentryat(' ', dialog_color, x, y);
+        }
+    }
+    
+    terminal_row = 10;
+    terminal_column = 25;
+    terminal_color = dialog_color;
+    terminal_writestring("CHANGE PASSWORD");
+    
+    terminal_row = 12;
+    terminal_column = 22;
+    terminal_writestring("Enter current password:");
+    
+    terminal_row = 14;
+    terminal_column = 22;
+    changing_password = true;
+    password_mode = true;
+    verify_current_password = true;
+    enter_new_password = false;
+    verify_password_index = 0;
+    new_password_index = 0;
+    
+    // Clear buffers
+    for (size_t i = 0; i < 20; i++) {
+        verify_password[i] = 0;
+        new_password[i] = 0;
+    }
+    
+    update_hardware_cursor(terminal_column, terminal_row);
+}
+
+/* Verify current password before allowing password change */
+void verify_old_password() {
+    if (strcmp(verify_password, current_password)) {
+        // Password correct - proceed to new password entry
+        verify_current_password = false;
+        enter_new_password = true;
+        
+        // Update the dialog to ask for new password
+        terminal_row = 12;
+        terminal_column = 22;
+        
+        // Clear the previous prompt line
+        for (size_t i = 0; i < 30; i++) {
+            terminal_putentryat(' ', terminal_color, terminal_column + i, terminal_row);
+        }
+        
+        terminal_column = 22;
+        terminal_writestring("Enter new password:");
+        
+        // Clear the input field
+        terminal_row = 14;
+        terminal_column = 22;
+        for (size_t i = 0; i < 20; i++) {
+            terminal_putentryat(' ', terminal_color, terminal_column + i, terminal_row);
+        }
+        terminal_column = 22;
+        update_hardware_cursor(terminal_column, terminal_row);
+    } else {
+        // Password incorrect - clear the input field and try again
+        terminal_row = 14;
+        terminal_column = 22;
+        for (size_t i = 0; i < 20; i++) {
+            terminal_putentryat(' ', terminal_color, terminal_column + i, terminal_row);
+            verify_password[i] = 0;
+        }
+        terminal_column = 22;
+        verify_password_index = 0;
+        
+        // Show error message
+        terminal_row = 16;
+        terminal_column = 22;
+        uint8_t error_color = make_color(COLOR_RED, COLOR_GREEN);
+        
+        // Clear previous message if any
+        for (size_t i = 0; i < 30; i++) {
+            terminal_putentryat(' ', terminal_color, terminal_column + i, terminal_row);
+        }
+        
+        // Show error
+        terminal_column = 22;
+        for (size_t i = 0; i < strlen("Incorrect password!"); i++) {
+            terminal_putentryat("Incorrect password!"[i], error_color, terminal_column++, terminal_row);
+        }
+        
+        terminal_row = 14;
+        terminal_column = 22;
+        update_hardware_cursor(terminal_column, terminal_row);
+    }
+}
+
+/* Complete password change */
+void finish_change_password() {
+    // Copy new password to current password
+    for (size_t i = 0; i < 20; i++) {
+        current_password[i] = new_password[i];
+    }
+    
+    changing_password = false;
+    password_mode = false;
+    verify_current_password = true;
+    enter_new_password = false;
+    
+    clear_screen();
+    
+    terminal_row = 10;
+    terminal_column = 25;
+    uint8_t success_color = make_color(COLOR_BLACK, COLOR_LIGHT_GREEN);
+    terminal_color = success_color;
+    
+    // Draw success message box
+    for (size_t y = 9; y < 14; y++) {
+        for (size_t x = 15; x < 65; x++) {
+            terminal_putentryat(' ', success_color, x, y);
+        }
+    }
+    
+    terminal_row = 10;
+    terminal_column = 25;
+    terminal_writestring("PASSWORD CHANGED SUCCESSFULLY");
+    
+    terminal_row = 12;
+    terminal_column = 20;
+    terminal_writestring("Press any key to continue...");
+    
+    // Wait for key press - when a key is pressed, restore the original screen
+    // This part would need to be handled in the keyboard handler
+
+    // Restore the original screen content
+    screen_locked = false;
+    password_mode = false;
+    restore_screen();
+    
+    // Reset terminal color to original
+    terminal_color = make_color(COLOR_LIGHT_GREY, COLOR_BLACK);
+    
+    // Make sure cursor is visible
+    cursor_visible = true;
+    enable_hardware_cursor(14, 15);
+    
+    // Update hardware cursor to match restored position
+    update_hardware_cursor(terminal_column, terminal_row);
+}
+
+/* Extended scancode table for function keys */
+const char extended_scancode_table[128] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '\n', 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+};
+
 /* Keyboard scancode array for US QWERTY layout */
 const char scancode_to_ascii[128] = {
     0, 0, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
@@ -192,6 +496,30 @@ const char scancode_to_ascii[128] = {
     '*', 0, ' ', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '-',
     0, 0, 0, '+', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
+
+/* Key scancodes */
+#define SCANCODE_F1  0x3B
+#define SCANCODE_F2  0x3C
+#define SCANCODE_F3  0x3D
+#define SCANCODE_F4  0x3E
+#define SCANCODE_F5  0x3F
+#define SCANCODE_F6  0x40
+#define SCANCODE_F7  0x41
+#define SCANCODE_F8  0x42
+#define SCANCODE_F9  0x43
+#define SCANCODE_F10 0x44
+#define SCANCODE_F11 0x57
+#define SCANCODE_F12 0x58
+
+
+#define SCANCODE_UP    0x48
+#define SCANCODE_DOWN  0x50
+#define SCANCODE_LEFT  0x4B
+#define SCANCODE_RIGHT 0x4D
+
+
+/* Extended key flag */
+bool extended_key = false;
 
 /* IDT structures */
 struct idt_entry {
@@ -342,23 +670,6 @@ void init_pic() {
     outb(0xA1, 0xFF); /* Mask all slave interrupts */
 }
 
-/* The keyboard handler C function */
-void keyboard_handler() {
-
-    /* Read scancode from keyboard data port */
-    uint8_t scancode = inb(0x60);
-    
-    /* Handle key press (not release) */
-    if (scancode < 128) {
-        char key = scancode_to_ascii[scancode];
-        if (key != 0) {
-            terminal_putchar(key);
-        }
-    }
-    
-    /* Send EOI to PIC */
-    outb(0x20, 0x20);
-}
 
 /* Initialize PIT (Programmable Interval Timer) for cursor blinking */
 void init_pit() {
@@ -401,6 +712,188 @@ void init_keyboard() {
     __asm__ volatile ("sti");
 }
 
+/* Modify the keyboard_handler function to handle arrow keys */
+void keyboard_handler() {
+    /* Read scancode from keyboard data port */
+    uint8_t scancode = inb(0x60);
+    
+    /* Check for extended key code (0xE0) */
+    if (scancode == 0xE0) {
+        extended_key = true;
+        /* Send EOI to PIC */
+        outb(0x20, 0x20);
+        return;
+    }
+    
+    /* Handle key release (bit 7 set) */
+    if (scancode & 0x80) {
+        /* Reset extended key flag if it was set */
+        extended_key = false;
+        /* Send EOI to PIC */
+        outb(0x20, 0x20);
+        return;
+    }
+    
+    /* Handle F12 key press for screen lock/unlock */
+    if (scancode == SCANCODE_F12) {
+        if (!screen_locked && !changing_password) {
+            /* Lock screen */
+            lock_screen();
+        } else if (!changing_password) {
+            /* Already locked, start change password mode */
+            start_change_password();
+        }
+        
+        /* Send EOI to PIC */
+        outb(0x20, 0x20);
+        return;
+    }
+    
+    /* Handle password mode input */
+    if (password_mode) {
+        if (scancode_to_ascii[scancode] == '\n') {
+            /* Enter key - process the entered password */
+            if (screen_locked && !changing_password) {
+                attempt_unlock();
+            } else if (changing_password) {
+                if (verify_current_password) {
+                    // First step: verify current password
+                    verify_old_password();
+                } else if (enter_new_password) {
+                    // Second step: set new password
+                    finish_change_password();
+                }
+            }
+        } else if (scancode_to_ascii[scancode] == '\b') {
+            /* Backspace - delete last character */
+            if (changing_password && verify_current_password && verify_password_index > 0) {
+                verify_password_index--;
+                verify_password[verify_password_index] = 0;
+                terminal_column--;
+                terminal_putentryat(' ', terminal_color, terminal_column, terminal_row);
+                update_hardware_cursor(terminal_column, terminal_row);
+            } else if (changing_password && enter_new_password && new_password_index > 0) {
+                new_password_index--;
+                new_password[new_password_index] = 0;
+                terminal_column--;
+                terminal_putentryat(' ', terminal_color, terminal_column, terminal_row);
+                update_hardware_cursor(terminal_column, terminal_row);
+            } else if (!changing_password && password_index > 0) {
+                password_index--;
+                input_password[password_index] = 0;
+                terminal_column--;
+                terminal_putentryat(' ', terminal_color, terminal_column, terminal_row);
+                update_hardware_cursor(terminal_column, terminal_row);
+            }
+        } else if (scancode_to_ascii[scancode] != 0) {
+            /* Regular character input */
+            if (changing_password && verify_current_password && verify_password_index < 19) {
+                verify_password[verify_password_index++] = scancode_to_ascii[scancode];
+                terminal_putentryat('*', terminal_color, terminal_column, terminal_row);
+                terminal_column++;
+                update_hardware_cursor(terminal_column, terminal_row);
+            } else if (changing_password && enter_new_password && new_password_index < 19) {
+                new_password[new_password_index++] = scancode_to_ascii[scancode];
+                terminal_putentryat('*', terminal_color, terminal_column, terminal_row);
+                terminal_column++;
+                update_hardware_cursor(terminal_column, terminal_row);
+            } else if (!changing_password && password_index < 19) {
+                input_password[password_index++] = scancode_to_ascii[scancode];
+                terminal_putentryat('*', terminal_color, terminal_column, terminal_row);
+                terminal_column++;
+                update_hardware_cursor(terminal_column, terminal_row);
+            }
+        }
+        
+        /* Send EOI to PIC */
+        outb(0x20, 0x20);
+        return;
+    }
+    
+    /* Arrow key handling - when extended_key is true and we receive arrow key scancodes */
+    if (extended_key && !screen_locked) {
+        switch (scancode) {
+            case SCANCODE_UP:
+                if (terminal_row > 0) {
+                    terminal_row--;
+                    update_hardware_cursor(terminal_column, terminal_row);
+                }
+                break;
+                
+            case SCANCODE_DOWN:
+                if (terminal_row < VGA_HEIGHT - 1) {
+                    terminal_row++;
+                    update_hardware_cursor(terminal_column, terminal_row);
+                }
+                break;
+                
+            case SCANCODE_LEFT:
+                if (terminal_column > 0) {
+                    terminal_column--;
+                    update_hardware_cursor(terminal_column, terminal_row);
+                } else if (terminal_row > 0) {
+                    // Wrap to end of previous line
+                    terminal_row--;
+                    terminal_column = VGA_WIDTH - 1;
+                    update_hardware_cursor(terminal_column, terminal_row);
+                }
+                break;
+                
+            case SCANCODE_RIGHT:
+                if (terminal_column < VGA_WIDTH - 1) {
+                    terminal_column++;
+                    update_hardware_cursor(terminal_column, terminal_row);
+                } else if (terminal_row < VGA_HEIGHT - 1) {
+                    // Wrap to beginning of next line
+                    terminal_row++;
+                    terminal_column = 0;
+                    update_hardware_cursor(terminal_column, terminal_row);
+                }
+                break;
+        }
+        
+        extended_key = false;
+        outb(0x20, 0x20);
+        return;
+    }
+    
+    /* Normal input handling */
+    if (!screen_locked) {
+        char key = scancode_to_ascii[scancode];
+        if (key != 0) {
+            terminal_putchar(key);
+        }
+    }
+    
+    /* Reset extended key flag */
+    extended_key = false;
+    
+    /* Send EOI to PIC */
+    outb(0x20, 0x20);
+}
+/* Let's also add a helper function to handle insertion mode */
+void terminal_insert_char(char c) {
+    size_t index = terminal_row * VGA_WIDTH + terminal_column;
+    
+    // Shift all characters to the right
+    for (size_t i = (VGA_HEIGHT * VGA_WIDTH - 1); i > index; i--) {
+        terminal_buffer[i] = terminal_buffer[i - 1];
+    }
+    
+    // Insert new character
+    terminal_buffer[index] = make_vgaentry(c, terminal_color);
+    
+    // Move cursor forward
+    if (++terminal_column == VGA_WIDTH) {
+        terminal_column = 0;
+        if (++terminal_row == VGA_HEIGHT) {
+            terminal_row = 0;
+        }
+    }
+    
+    update_hardware_cursor(terminal_column, terminal_row);
+}
+
 #if defined(__cplusplus)
 extern "C" /* Use C linkage for kernel_main. */
 #endif
@@ -416,7 +909,10 @@ void kernel_main() {
     init_keyboard();
     
     terminal_writestring("Initialization complete. Start typing...\n");
-    
+    terminal_writestring("\nPress F12 to lock/unlock screen\n");
+    terminal_writestring("Default password: admin123\n");
+    terminal_writestring("When screen is locked, press F12 again to change password\n");
+    terminal_writestring("Use arrow keys to navigate the cursor\n");
     /* Hang forever, waiting for interrupts */
     while (1) {
         __asm__ volatile ("hlt");

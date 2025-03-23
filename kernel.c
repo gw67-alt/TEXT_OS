@@ -345,7 +345,6 @@ void init_pic() {
 /* The keyboard handler C function */
 void keyboard_handler() {
 
-    terminal_putentryat('X', make_color(COLOR_RED, COLOR_BLACK), 79, 0);
     /* Read scancode from keyboard data port */
     uint8_t scancode = inb(0x60);
     
@@ -408,7 +407,8 @@ extern "C" /* Use C linkage for kernel_main. */
 void kernel_main() {
     /* Initialize terminal interface */
     terminal_initialize();
-    
+    terminal_putentryat('X', make_color(COLOR_RED, COLOR_BLACK), 79, 0);
+
     terminal_writestring("Hello, kernel World!\n");
     terminal_writestring("Initializing keyboard and cursor...\n");
     

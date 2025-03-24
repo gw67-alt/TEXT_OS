@@ -442,7 +442,11 @@ void init_keyboard() {
     __asm__ volatile ("sti");
 }
 
-/* Modify the keyboard_handler function to handle arrow keys */
+#define MAX_COMMAND_LENGTH 80
+char command_buffer[MAX_COMMAND_LENGTH];
+int command_length = 0;
+
+/* Modify the keyboard_handler function to update the command buffer */
 void keyboard_handler() {
     /* Read scancode from keyboard data port */
     uint8_t scancode = inb(0x60);
@@ -464,57 +468,23 @@ void keyboard_handler() {
         return;
     }
 
-    /* Arrow key handling - when extended_key is true and we receive arrow key scancodes */
-    if (extended_key) {
-        switch (scancode) {
-            case SCANCODE_UP:
-                if (terminal_row > 0) {
-                    terminal_row--;
-                    update_hardware_cursor(terminal_column, terminal_row);
-                }
-                break;
-
-            case SCANCODE_DOWN:
-                if (terminal_row < VGA_HEIGHT - 1) {
-                    terminal_row++;
-                    update_hardware_cursor(terminal_column, terminal_row);
-                }
-                break;
-
-            case SCANCODE_LEFT:
-                if (terminal_column > 0) {
-                    terminal_column--;
-                    update_hardware_cursor(terminal_column, terminal_row);
-                } else if (terminal_row > 0) {
-                    // Wrap to end of previous line
-                    terminal_row--;
-                    terminal_column = VGA_WIDTH - 1;
-                    update_hardware_cursor(terminal_column, terminal_row);
-                }
-                break;
-
-            case SCANCODE_RIGHT:
-                if (terminal_column < VGA_WIDTH - 1) {
-                    terminal_column++;
-                    update_hardware_cursor(terminal_column, terminal_row);
-                } else if (terminal_row < VGA_HEIGHT - 1) {
-                    // Wrap to beginning of next line
-                    terminal_row++;
-                    terminal_column = 0;
-                    update_hardware_cursor(terminal_column, terminal_row);
-                }
-                break;
-        }
-
-        extended_key = false;
-        outb(0x20, 0x20);
-        return;
-    }
-
     /* Normal input handling */
     char key = scancode_to_ascii[scancode];
     if (key != 0) {
-        terminal_putchar(key);
+        if (key == '\n') {
+            terminal_putchar(key);
+            command_buffer[command_length++] = '\n';
+            command_buffer[command_length] = '\0';
+            // Command processing will happen in kernel_main
+        } else if (key == '\b') {
+            if (command_length > 0) {
+                terminal_putchar(key);
+                command_length--;
+            }
+        } else if (command_length < MAX_COMMAND_LENGTH - 1) {
+            command_buffer[command_length++] = key;
+            terminal_putchar(key);
+        }
     }
 
     /* Reset extended key flag */
@@ -549,21 +519,57 @@ void terminal_insert_char(char c) {
 #if defined(__cplusplus)
 extern "C" /* Use C linkage for kernel_main. */
 #endif
+
 void kernel_main() {
     /* Initialize terminal interface */
     terminal_initialize();
-    terminal_putentryat('X', make_color(COLOR_RED, COLOR_BLACK), 79, 0);
-
-    terminal_writestring("Hello, kernel World!\n");
-    terminal_writestring("Initializing keyboard and cursor...\n");
 
     /* Initialize keyboard and timer interrupts */
     init_keyboard();
 
-    terminal_writestring("Initialization complete. Start typing...\n");
-    terminal_writestring("Use arrow keys to navigate the cursor\n");
-    /* Hang forever, waiting for interrupts */
-    while (1) {
-        __asm__ volatile ("hlt");
+    terminal_writestring("Hello, kernel World!\n");
+    terminal_writestring("Initialization complete. Start typing commands...\n");
+
+    while (1) {  // Main processing loop
+        terminal_writestring("> ");
+        command_length = 0;
+        command_buffer[0] = '\0';
+
+        bool command_complete = false;
+        while (!command_complete) {
+            // Check if newline was received
+            for (int i = 0; i < command_length; i++) {
+                if (command_buffer[i] == '\n') {
+                    command_complete = true;
+                    break;
+                }
+            }
+            
+            // Check for buffer overflow
+            if (command_length >= MAX_COMMAND_LENGTH - 1) {
+                terminal_writestring("\nCommand too long\n");
+                command_complete = true;
+            }
+        }
+
+        // Remove the trailing newline character
+        if (command_length > 0 && command_buffer[command_length - 1] == '\n') {
+            command_buffer[command_length - 1] = '\0';
+            command_length--;
+        }
+
+        if (command_length > 0) {
+            if (strcmp(command_buffer, "help")) {
+                terminal_writestring("Available commands: help, clear, hello\n");
+            } else if (strcmp(command_buffer, "clear")) {
+                clear_screen();
+            } else if (strcmp(command_buffer, "hello")) {
+                terminal_writestring("Hello, user!\n");
+            } else {
+                terminal_writestring("Unknown command: ");
+                terminal_writestring(command_buffer);
+                terminal_writestring("\n");
+            }
+        }
     }
 }

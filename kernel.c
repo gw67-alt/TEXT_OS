@@ -558,7 +558,6 @@ void kernel_main() {
 
     terminal_writestring("Hello, kernel World!\n");
     terminal_writestring("Initialization complete. Start typing commands...\n");
-    terminal_writestring("Command processing now handled directly in keyboard interrupt\n");
     
     /* Display initial prompt */
     terminal_writestring("> ");

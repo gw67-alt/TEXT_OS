@@ -1,21 +1,30 @@
-#ifndef DRIVE_H
-#define DRIVE_H
+#ifndef DRIVER_H
+#define DRIVER_H
 
-// Initialize SATA subsystem
-void init_sata_drives();
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
 
-// List detected SATA drives
-void cmd_list_sata_drives();
+// Memory allocation functions
+void* kmalloc(size_t size);
+void* kmalloc_aligned(size_t size, size_t align);
+void kfree(void* ptr);
+uint32_t virt_to_phys(void* virt_addr);
 
-#endif
+// I/O port functions
+uint8_t inb(uint16_t port);
+void outb(uint16_t port, uint8_t value);
+uint16_t inw(uint16_t port);
+void outw(uint16_t port, uint16_t value);
+uint32_t inl(uint16_t port);
+void outl(uint16_t port, uint32_t value);
 
-/* I/O port functions */
-static inline uint8_t inb(uint16_t port) {
-    uint8_t ret;
-    __asm__ volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port));
-    return ret;
-}
+// PCI enumeration functions
+uint32_t find_ahci_controller(void);
+void enumerate_pci_devices(void);
 
-static inline void outb(uint16_t port, uint8_t val) {
-    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
-}
+// AHCI driver functions
+void init_ahci_drives(void);
+void cmd_list_ahci_drives(void);
+
+#endif /* DRIVER_H */

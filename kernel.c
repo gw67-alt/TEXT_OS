@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "hardware_specs.h"
+#include "io.h"
+
 /* Check if the compiler thinks we are targeting the wrong operating system. */
 #if defined(__linux__)
 /* TODO what is this check? It was failing. */
@@ -71,8 +73,7 @@ void ultoa(unsigned long value, char* str, int base);
 int toupper(int c);
 void int_to_string(int num, char* str);
 void reverse_string(char* str, int start, int end);
-static inline uint8_t inb(uint16_t port);
-static inline void outb(uint16_t port, uint8_t val);
+
 void update_hardware_cursor(int x, int y);
 void enable_hardware_cursor(uint8_t cursor_start, uint8_t cursor_end);
 void disable_hardware_cursor();
@@ -341,16 +342,7 @@ uint16_t* terminal_buffer;
 bool cursor_visible = true;  // Cursor visibility state
 uint32_t cursor_blink_counter = 0;  // Counter for cursor blinking
 
-/* I/O port functions */
-static inline uint8_t inb(uint16_t port) {
-    uint8_t ret;
-    __asm__ volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port));
-    return ret;
-}
 
-static inline void outb(uint16_t port, uint8_t val) {
-    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
-}
 
 // Function to update the clock display in the top-right corner
 void update_clock_display() {
@@ -464,31 +456,6 @@ void terminal_setcolor(uint8_t color) {
 void terminal_putentryat(char c, uint8_t color, size_t x, size_t y) {
     const size_t index = y * VGA_WIDTH + x;
     terminal_buffer[index] = make_vgaentry(c, color);
-}
-
-// Add this function before terminal_putchar
-void terminal_scroll() {
-    // Move all rows up by one (effectively deleting the top row)
-    for (size_t y = 0; y < VGA_HEIGHT - 1; y++) {
-        for (size_t x = 0; x < VGA_WIDTH; x++) {
-            const size_t dst_index = y * VGA_WIDTH + x;
-            const size_t src_index = (y + 1) * VGA_WIDTH + x;
-            terminal_buffer[dst_index] = terminal_buffer[src_index];
-        }
-    }
-    
-    // Clear the last row
-    for (size_t x = 0; x < VGA_WIDTH; x++) {
-        const size_t index = (VGA_HEIGHT - 1) * VGA_WIDTH + x;
-        terminal_buffer[index] = make_vgaentry(' ', terminal_color);
-    }
-    
-    // Adjust the cursor to the beginning of the last row
-    terminal_row = VGA_HEIGHT - 1;
-    terminal_column = 0;
-    
-    // Make sure to update the clock display after scrolling
-    update_clock_display();
 }
 
 // Now modify the terminal_putchar function to use scrolling
@@ -830,8 +797,56 @@ void cmd_clear();
 void cmd_hello();
 void cmd_time(); // New command for displaying time info
 void process_command();
+// Add these global variables
+bool pagination_enabled = true;  // Control to toggle pagination on/off
+bool pagination_waiting = false; // Flag to indicate waiting for Enter
 
-/* Keyboard handler with integrated command processing */
+// Add this function to wait for Enter key press
+void wait_for_enter() {
+    // Save current position and color
+    size_t saved_row = terminal_row;
+    size_t saved_column = terminal_column;
+    uint8_t saved_color = terminal_color;
+    
+    // Set special color for pagination message
+    terminal_setcolor(make_color(VGA_COLOR_WHITE, VGA_COLOR_BLUE));
+    
+    // Print message on the last line
+    for (size_t x = 0; x < VGA_WIDTH; x++) {
+        terminal_putentryat(' ', terminal_color, x, VGA_HEIGHT - 1);
+    }
+    
+    const char* msg = "-- Press Enter to continue --";
+    size_t msg_len = strlen(msg);
+    size_t msg_start = (VGA_WIDTH - msg_len) / 2;
+    
+    for (size_t i = 0; i < msg_len; i++) {
+        terminal_putentryat(msg[i], terminal_color, msg_start + i, VGA_HEIGHT - 1);
+    }
+    
+    // Update cursor to message end
+    update_hardware_cursor(msg_start + msg_len, VGA_HEIGHT - 1);
+    
+    // Set waiting flag
+    pagination_waiting = true;
+    
+    // Wait for Enter key press
+    while (pagination_waiting) {
+        __asm__ volatile ("hlt");
+    }
+    
+    // Clear the pagination message line
+    for (size_t x = 0; x < VGA_WIDTH; x++) {
+        terminal_putentryat(' ', saved_color, x, VGA_HEIGHT - 1);
+    }
+    
+    // Restore color and position
+    terminal_setcolor(saved_color);
+    terminal_row = saved_row;
+    terminal_column = saved_column;
+    update_hardware_cursor(terminal_column, terminal_row);
+}
+// Modify keyboard handler to handle pagination
 void keyboard_handler() {
     /* Read scancode from keyboard data port */
     uint8_t scancode = inb(0x60);
@@ -853,7 +868,18 @@ void keyboard_handler() {
         return;
     }
 
-    /* Normal input handling */
+    /* Check if waiting for Enter during pagination */
+    if (pagination_waiting) {
+        char key = scancode_to_ascii[scancode];
+        if (key == '\n') {
+            pagination_waiting = false;
+        }
+        /* Send EOI to PIC */
+        outb(0x20, 0x20);
+        return;
+    }
+
+     /* Normal input handling */
     char key = scancode_to_ascii[scancode];
     if (key != 0) {
         if (key == '\n') {
@@ -885,6 +911,54 @@ void keyboard_handler() {
 
     /* Send EOI to PIC */
     outb(0x20, 0x20);
+	}
+// Modify terminal_scroll to implement pagination
+void terminal_scroll() {
+    // Check if pagination is enabled
+    if (pagination_enabled) {
+        wait_for_enter();
+        
+        // Directly clear the screen instead of scrolling
+        for (size_t y = 0; y < VGA_HEIGHT; y++) {
+            for (size_t x = 0; x < VGA_WIDTH; x++) {
+                const size_t index = y * VGA_WIDTH + x;
+                terminal_buffer[index] = make_vgaentry(' ', terminal_color);
+            }
+        }
+        
+        // Set cursor to top of screen
+        terminal_row = 0;
+        terminal_column = 0;
+        update_hardware_cursor(terminal_column, terminal_row);
+        
+        // Make sure to update the clock display
+        update_clock_display();
+        
+        // Return early - we've cleared the screen instead of scrolling
+        return;
+    }
+    
+    // If pagination is disabled, perform normal scrolling
+    for (size_t y = 0; y < VGA_HEIGHT - 1; y++) {
+        for (size_t x = 0; x < VGA_WIDTH; x++) {
+            const size_t dst_index = y * VGA_WIDTH + x;
+            const size_t src_index = (y + 1) * VGA_WIDTH + x;
+            terminal_buffer[dst_index] = terminal_buffer[src_index];
+        }
+    }
+    
+    // Clear the last row
+    for (size_t x = 0; x < VGA_WIDTH; x++) {
+        const size_t index = (VGA_HEIGHT - 1) * VGA_WIDTH + x;
+        terminal_buffer[index] = make_vgaentry(' ', terminal_color);
+    }
+    
+    // Adjust the cursor to the beginning of the last row
+    terminal_row = VGA_HEIGHT - 1;
+    terminal_column = 0;
+    
+    // Make sure to update the clock display after scrolling
+    update_clock_display();
 }
 
 /* Process the command in the buffer */
@@ -906,9 +980,7 @@ void process_command() {
         cmd_hello();
     } else if (strcmp(command_buffer, "time")) {
         cmd_time();
-    } else if (strcmp(command_buffer, "lsdrive")) {
-		cmd_list_sata_drives();
-	} else {
+    } else {
         terminal_writestring("Unknown command: ");
         terminal_writestring(command_buffer);
         terminal_writestring("\n");
@@ -986,7 +1058,7 @@ void kernel_main() {
     init_rtc();
 	
 	/* Initialize SATA drives */
-    init_sata_drives();
+    enumerate_pci_devices();
 	
     terminal_writestring("Initialization complete. Start typing commands...\n");
     

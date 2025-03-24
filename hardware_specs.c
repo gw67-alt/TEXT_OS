@@ -2,7 +2,7 @@
 #include <stdbool.h>
 #include "kernel.h"
 #include "hardware_specs.h"
-
+#include "io.h"
 // Hardware detection and specification structure
 hardware_info_t system_hardware;
 

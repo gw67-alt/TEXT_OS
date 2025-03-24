@@ -466,12 +466,39 @@ void terminal_putentryat(char c, uint8_t color, size_t x, size_t y) {
     terminal_buffer[index] = make_vgaentry(c, color);
 }
 
+// Add this function before terminal_putchar
+void terminal_scroll() {
+    // Move all rows up by one (effectively deleting the top row)
+    for (size_t y = 0; y < VGA_HEIGHT - 1; y++) {
+        for (size_t x = 0; x < VGA_WIDTH; x++) {
+            const size_t dst_index = y * VGA_WIDTH + x;
+            const size_t src_index = (y + 1) * VGA_WIDTH + x;
+            terminal_buffer[dst_index] = terminal_buffer[src_index];
+        }
+    }
+    
+    // Clear the last row
+    for (size_t x = 0; x < VGA_WIDTH; x++) {
+        const size_t index = (VGA_HEIGHT - 1) * VGA_WIDTH + x;
+        terminal_buffer[index] = make_vgaentry(' ', terminal_color);
+    }
+    
+    // Adjust the cursor to the beginning of the last row
+    terminal_row = VGA_HEIGHT - 1;
+    terminal_column = 0;
+    
+    // Make sure to update the clock display after scrolling
+    update_clock_display();
+}
+
+// Now modify the terminal_putchar function to use scrolling
 void terminal_putchar(char c) {
     if (c == '\n') {
         // Handle newline character
         terminal_column = 0;
         if (++terminal_row == VGA_HEIGHT) {
-            terminal_row = 0;
+            // Instead of wrapping to 0, scroll the screen
+            terminal_scroll();
         }
     } else if (c == '\b') {
         // Handle backspace character
@@ -493,7 +520,8 @@ void terminal_putchar(char c) {
         if (++terminal_column == VGA_WIDTH) {
             terminal_column = 0;
             if (++terminal_row == VGA_HEIGHT) {
-                terminal_row = 0;
+                // Instead of wrapping to 0, scroll the screen
+                terminal_scroll();
             }
         }
     }
@@ -501,7 +529,6 @@ void terminal_putchar(char c) {
     // Update the hardware cursor position
     update_hardware_cursor(terminal_column, terminal_row);
 }
-
 void terminal_writestring(const char* data) {
     size_t datalen = strlen(data);
     for (size_t i = 0; i < datalen; i++)
@@ -879,7 +906,9 @@ void process_command() {
         cmd_hello();
     } else if (strcmp(command_buffer, "time")) {
         cmd_time();
-    } else {
+    } else if (strcmp(command_buffer, "lsdrive")) {
+		cmd_list_sata_drives();
+	} else {
         terminal_writestring("Unknown command: ");
         terminal_writestring(command_buffer);
         terminal_writestring("\n");

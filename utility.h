@@ -1,167 +1,179 @@
-#ifndef UTILITY_H
-#define UTILITY_H
+#include "kernel.h"
 
-#include <stddef.h>
-#include <stdint.h>
-
-// String functions
-size_t strlen(const char* str);
-bool strcmp(const char* s1, const char* s2);
-bool strncmp(const char* s1, const char* s2, size_t n);
-char* strchr(const char* str, char ch);
-
-// Memory functions
-void* memcpy(void* dest, const void* src, size_t n);
-void* memset(void* s, int c, size_t n);
-
-// Conversion functions
-void itoa(int value, char* str, int base);
-
-// Memory allocation functions for our implementation
-void* malloc(size_t size);
-void free(void* ptr);
-
-#endif /* UTILITY_H */
-void ultoa(uint64_t n, char* s, int b) {
-    int i = 0;
-    if (n == 0) {
-        s[0] = '0';
-        s[1] = '\0';
-        return;
-    }
-    while (n > 0) {
-        uint64_t remainder = n % b;
-        s[i++] = (remainder < 10) ? (remainder + '0') : (remainder - 10 + 'a');
-        n /= b;
-    }
-    s[i] = '\0';
-    // Reverse the string
-    int j;
-    char temp;
-    for (j = 0; j < i / 2; j++) {
-        temp = s[j];
-        s[j] = s[i - 1 - j];
-        s[i - 1 - j] = temp;
-    }
-}
-
-/* Memory allocation functions for our implementation */
-void* malloc(size_t size) {
-    // This is a very basic memory allocator - not suitable for production
-    // For this example, we'll use a fixed buffer
-    static uint8_t memory_pool[16384]; // 16KB memory pool
-    static size_t next_free = 0;
-    
-    // Align size to the nearest multiple of 4 bytes
-    size = (size + 3) & ~3;
-    
-    // Check for out of memory before incrementing next_free
-    if (next_free + size > sizeof(memory_pool)) {
-        return NULL;
-    }
-    
-    // Simple bump allocator - no free functionality
-    void* ptr = memory_pool + next_free;
-    next_free += size;
-    
-    return ptr;
-}
-
-void free(void* ptr) {
-    // This simple allocator doesn't support freeing memory
-    // Just a stub for compatibility
-    (void)ptr;
-}
-
-void* memcpy(void* dest, const void* src, size_t n) {
-    uint8_t* d = (uint8_t*)dest;
-    const uint8_t* s = (const uint8_t*)src;
-    
-    for (size_t i = 0; i < n; i++) {
-        d[i] = s[i];
-    }
-    
-    return dest;
-}
-
+/* Memory set */
 void* memset(void* s, int c, size_t n) {
-    uint8_t* p = (uint8_t*)s;
-    
-    for (size_t i = 0; i < n; i++) {
-        p[i] = (uint8_t)c;
+    unsigned char* p = (unsigned char*)s;
+    while (n--) {
+        *p++ = (unsigned char)c;
     }
-    
     return s;
 }
 
+/* Memory copy */
+void* memcpy(void* dest, const void* src, size_t n) {
+    unsigned char* d = (unsigned char*)dest;
+    const unsigned char* s = (const unsigned char*)src;
+    while (n--) {
+        *d++ = *s++;
+    }
+    return dest;
+}
+
+/* String length */
 size_t strlen(const char* str) {
     size_t len = 0;
-    while (str[len])
+    while (str[len] != '\0') {
         len++;
+    }
     return len;
 }
 
+/* String copy */
+char* strcpy(char* dest, const char* src) {
+    char* original_dest = dest;
+    while (*src) {
+        *dest++ = *src++;
+    }
+    *dest = '\0';
+    return original_dest;
+}
+
+/* String comparison */
 bool strcmp(const char* s1, const char* s2) {
-    while (*s1 && (*s1 == *s2)) {
+    while (*s1 && *s2) {
+        if (*s1 != *s2) {
+            return false;
+        }
         s1++;
         s2++;
     }
     return *s1 == *s2;
 }
 
-bool strncmp(const char* s1, const char* s2, size_t n) {
-    for (size_t i = 0; i < n; i++) {
-        if (s1[i] != s2[i]) {
-            return false;
-        }
-        if (s1[i] == '\0') {
-            break;
-        }
-    }
-    return true;
-}
-
-char* strchr(const char* str, char ch) {
-    while (*str && *str != ch) {
-        str++;
-    }
-    
-    return (*str == ch) ? (char*)str : NULL;
-}
-
+/* Integer to string conversion */
 void itoa(int value, char* str, int base) {
-    static const char digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    char* rc;
+    char* ptr;
+    char* low;
     
-    char* ptr = str;
-    bool negative = false;
+    // Check for supported base
+    if (base < 2 || base > 36) {
+        *str = '\0';
+        return;
+    }
+    
+    rc = ptr = str;
     
     // Handle negative numbers
-    if (value < 0 && base == 10) {
-        negative = true;
+    if (value < 0) {
+        *ptr++ = '-';
         value = -value;
     }
     
-    // Store digits in reverse order
+    low = ptr;
+    
+    // Convert number
     do {
-        *ptr++ = digits[value % base];
+        *ptr++ = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[value % base];
         value /= base;
-    } while (value);
+    } while (value > 0);
     
-    // Add negative sign if needed
-    if (negative) {
-        *ptr++ = '-';
-    }
-    
-    // Terminate the string
+    // Terminate string
     *ptr = '\0';
     
-    // Reverse the string
+    // Reverse string
     ptr--;
-    char* start = str;
-    char temp;
-    while (start < ptr) {
-        temp = *start;
-        *start++ = *ptr;
+    while (low < ptr) {
+        char temp = *low;
+        *low++ = *ptr;
         *ptr-- = temp;
+    }
+}
+
+/* Unsigned long to string conversion */
+void ultoa(unsigned long value, char* str, int base) {
+    char* rc;
+    char* ptr;
+    char* low;
+    
+    // Check for supported base
+    if (base < 2 || base > 36) {
+        *str = '\0';
+        return;
+    }
+    
+    rc = ptr = str;
+    
+    // Convert number
+    do {
+        *ptr++ = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[value % base];
+        value /= base;
+    } while (value > 0);
+    
+    // Terminate string
+    *ptr = '\0';
+    
+    // Reverse string
+    ptr--;
+    while (rc < ptr) {
+        char temp = *rc;
+        *rc++ = *ptr;
+        *ptr-- = temp;
+    }
+}
+
+/* Character to uppercase */
+int toupper(int c) {
+    if (c >= 'a' && c <= 'z') {
+        return c - 'a' + 'A';
+    }
+    return c;
+}
+
+
+// Convert an integer to a string
+void int_to_string(int num, char* str) {
+    int i = 0;
+    bool is_negative = false;
+    
+    // Handle 0 explicitly
+    if (num == 0) {
+        str[i++] = '0';
+        str[i] = '\0';
+        return;
+    }
+    
+    // Handle negative numbers
+    if (num < 0) {
+        is_negative = true;
+        num = -num;
+    }
+    
+    // Process individual digits
+    while (num != 0) {
+        int rem = num % 10;
+        str[i++] = (rem > 9) ? (rem - 10) + 'a' : rem + '0';
+        num = num / 10;
+    }
+    
+    // Add negative sign if needed
+    if (is_negative)
+        str[i++] = '-';
+    
+    // Add null terminator
+    str[i] = '\0';
+    
+    // Reverse the string
+    reverse_string(str, 0, i - 1);
+}
+
+// Helper function to reverse a string
+void reverse_string(char* str, int start, int end) {
+    while (start < end) {
+        char temp = str[start];
+        str[start] = str[end];
+        str[end] = temp;
+        start++;
+        end--;
     }
 }

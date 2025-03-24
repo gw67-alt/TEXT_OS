@@ -38,6 +38,71 @@ enum vga_color {
     VGA_COLOR_WHITE = 15,
 };
 
+// RTC (Real Time Clock) registers
+#define CMOS_ADDRESS     0x70
+#define CMOS_DATA        0x71
+
+// RTC register addresses
+#define RTC_SECONDS      0x00
+#define RTC_MINUTES      0x02
+#define RTC_HOURS        0x04
+#define RTC_DAY          0x07
+#define RTC_MONTH        0x08
+#define RTC_YEAR         0x09
+
+// Variables to store current time
+uint8_t current_seconds = 0;
+uint8_t current_minutes = 0;
+uint8_t current_hours = 0;
+
+// Timer counter for tracking seconds
+uint32_t timer_ticks = 0;
+
+// Function prototypes
+uint8_t make_color(enum vga_color fg, enum vga_color bg);
+uint16_t make_vgaentry(char c, uint8_t color);
+void* memset(void* s, int c, size_t n);
+void* memcpy(void* dest, const void* src, size_t n);
+size_t strlen(const char* str);
+char* strcpy(char* dest, const char* src);
+bool strcmp(const char* s1, const char* s2);
+void itoa(int value, char* str, int base);
+void ultoa(unsigned long value, char* str, int base);
+int toupper(int c);
+void int_to_string(int num, char* str);
+void reverse_string(char* str, int start, int end);
+static inline uint8_t inb(uint16_t port);
+static inline void outb(uint16_t port, uint8_t val);
+void update_hardware_cursor(int x, int y);
+void enable_hardware_cursor(uint8_t cursor_start, uint8_t cursor_end);
+void disable_hardware_cursor();
+void clear_screen();
+void terminal_initialize();
+void terminal_setcolor(uint8_t color);
+void terminal_putentryat(char c, uint8_t color, size_t x, size_t y);
+void terminal_putchar(char c);
+void terminal_writestring(const char* data);
+void update_cursor_state();
+void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran);
+void init_gdt();
+void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags);
+void idt_load();
+void keyboard_handler();
+void timer_handler();
+void init_pic();
+void init_pit();
+void init_keyboard();
+void cmd_help();
+void cmd_clear();
+void cmd_hello();
+void process_command();
+
+// RTC function prototypes
+uint8_t read_cmos(uint8_t reg);
+uint8_t bcd_to_binary(uint8_t bcd);
+void read_rtc_time();
+void update_clock_display();
+void init_rtc();
 
 uint8_t make_color(enum vga_color fg, enum vga_color bg) {
     return fg | bg << 4;
@@ -228,6 +293,44 @@ void reverse_string(char* str, int start, int end) {
     }
 }
 
+// Function to read a value from CMOS/RTC
+uint8_t read_cmos(uint8_t reg) {
+    // Disable NMI and select the register
+    outb(CMOS_ADDRESS, reg | 0x80);
+    // Read the value
+    uint8_t value = inb(CMOS_DATA);
+    return value;
+}
+
+// Convert BCD to binary if needed
+uint8_t bcd_to_binary(uint8_t bcd) {
+    return ((bcd >> 4) * 10) + (bcd & 0x0F);
+}
+
+// Function to read the current time from RTC
+void read_rtc_time() {
+    // Read hours, minutes, and seconds from RTC
+    uint8_t seconds = read_cmos(RTC_SECONDS);
+    uint8_t minutes = read_cmos(RTC_MINUTES);
+    uint8_t hours = read_cmos(RTC_HOURS);
+    
+    // Check if values are in BCD format (typical for RTC)
+    // Status Register B, bit 2 indicates if BCD (0) or binary (1)
+    uint8_t status_b = read_cmos(0x0B);
+    
+    if (!(status_b & 0x04)) {
+        // Convert from BCD to binary if needed
+        seconds = bcd_to_binary(seconds);
+        minutes = bcd_to_binary(minutes);
+        hours = bcd_to_binary(hours);
+    }
+    
+    // Store the current time
+    current_seconds = seconds;
+    current_minutes = minutes;
+    current_hours = hours;
+}
+
 static const size_t VGA_WIDTH = 80;
 static const size_t VGA_HEIGHT = 25;
 
@@ -247,6 +350,54 @@ static inline uint8_t inb(uint16_t port) {
 
 static inline void outb(uint16_t port, uint8_t val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+// Function to update the clock display in the top-right corner
+void update_clock_display() {
+    const size_t clock_x = VGA_WIDTH - 8;  // Position for HH:MM:SS
+    const size_t clock_y = 0;              // Top row
+    char time_str[9];                      // HH:MM:SS + null terminator
+    
+    // Format the time string
+    time_str[0] = (current_hours / 10) + '0';
+    time_str[1] = (current_hours % 10) + '0';
+    time_str[2] = ':';
+    time_str[3] = (current_minutes / 10) + '0';
+    time_str[4] = (current_minutes % 10) + '0';
+    time_str[5] = ':';
+    time_str[6] = (current_seconds / 10) + '0';
+    time_str[7] = (current_seconds % 10) + '0';
+    time_str[8] = '\0';
+    
+    // Backup current cursor position
+    size_t saved_row = terminal_row;
+    size_t saved_column = terminal_column;
+    uint8_t saved_color = terminal_color;
+    
+    // Set color for clock (bright white on black)
+    terminal_setcolor(make_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
+    
+    // Directly write the time characters to the terminal buffer
+    for (size_t i = 0; i < 8; i++) {
+        terminal_putentryat(time_str[i], terminal_color, clock_x + i, clock_y);
+    }
+    
+    // Restore cursor position and color
+    terminal_row = saved_row;
+    terminal_column = saved_column;
+    terminal_setcolor(saved_color);
+    
+    // Update hardware cursor to restore its position
+    update_hardware_cursor(terminal_column, terminal_row);
+}
+
+// Initialize the real-time clock functionality
+void init_rtc() {
+    // Read the initial time
+    read_rtc_time();
+    
+    // Set up the initial clock display
+    update_clock_display();
 }
 
 /* VGA cursor control functions */
@@ -284,6 +435,9 @@ void clear_screen() {
     terminal_row = 0;
     terminal_column = 0;
     update_hardware_cursor(terminal_column, terminal_row);
+    
+    // Make sure to update the clock display after clearing screen
+    update_clock_display();
 }
 
 void terminal_initialize() {
@@ -534,8 +688,36 @@ __asm__(
 
 /* Timer handler C function */
 void timer_handler() {
+    // Increment timer ticks
+    timer_ticks++;
+    
     // Blink cursor
     update_cursor_state();
+    
+    // Update clock every second (100 ticks at 100 Hz)
+    if (timer_ticks % 100 == 0) {
+        // Increment seconds
+        current_seconds++;
+        if (current_seconds >= 60) {
+            current_seconds = 0;
+            current_minutes++;
+            if (current_minutes >= 60) {
+                current_minutes = 0;
+                current_hours++;
+                if (current_hours >= 24) {
+                    current_hours = 0;
+                }
+            }
+        }
+        
+        // Every 10 seconds, sync with RTC to ensure accuracy
+        if (current_seconds % 10 == 0) {
+            read_rtc_time();
+        }
+        
+        // Update the clock display
+        update_clock_display();
+    }
 
     // Send EOI to PIC
     outb(0x20, 0x20);
@@ -566,9 +748,9 @@ void init_pic() {
 }
 
 
-/* Initialize PIT (Programmable Interval Timer) for cursor blinking */
+/* Initialize PIT (Programmable Interval Timer) for cursor blinking and clock */
 void init_pit() {
-    uint32_t divisor = 1193180 / 100; // 100 Hz timer frequency
+    uint32_t divisor = 1193180 / 100; // 100 Hz timer frequency (10ms intervals)
 
     // Set command byte: channel 0, access mode lobyte/hibyte, mode 3 (square wave)
     outb(0x43, 0x36);
@@ -576,6 +758,9 @@ void init_pit() {
     // Send divisor (low byte first, then high byte)
     outb(0x40, divisor & 0xFF);
     outb(0x40, (divisor >> 8) & 0xFF);
+    
+    // Reset timer ticks counter
+    timer_ticks = 0;
 }
 
 /* Initialize keyboard */
@@ -606,6 +791,7 @@ void init_keyboard() {
     /* Enable interrupts */
     __asm__ volatile ("sti");
 }
+
 #define MAX_COMMAND_LENGTH 80
 char command_buffer[MAX_COMMAND_LENGTH];
 int command_length = 0;
@@ -615,6 +801,7 @@ bool command_ready = false;
 void cmd_help();
 void cmd_clear();
 void cmd_hello();
+void cmd_time(); // New command for displaying time info
 void process_command();
 
 /* Keyboard handler with integrated command processing */
@@ -690,6 +877,8 @@ void process_command() {
         cmd_clear();
     } else if (strcmp(command_buffer, "hello")) {
         cmd_hello();
+    } else if (strcmp(command_buffer, "time")) {
+        cmd_time();
     } else {
         terminal_writestring("Unknown command: ");
         terminal_writestring(command_buffer);
@@ -703,6 +892,7 @@ void cmd_help() {
     terminal_writestring("  help  - Show this help message\n");
     terminal_writestring("  clear - Clear the screen\n");
     terminal_writestring("  hello - Display a greeting\n");
+    terminal_writestring("  time  - Display the current time details\n");
 }
 
 void cmd_clear() {
@@ -713,14 +903,57 @@ void cmd_hello() {
     terminal_writestring("Hello, user!\n");
 }
 
+// New command to display detailed time information
+void cmd_time() {
+    char time_str[32];
+    
+    terminal_writestring("Current system time:\n");
+    
+    // Format hours
+    terminal_writestring("  Hours:   ");
+    itoa(current_hours, time_str, 10);
+    terminal_writestring(time_str);
+    terminal_writestring("\n");
+    
+    // Format minutes
+    terminal_writestring("  Minutes: ");
+    itoa(current_minutes, time_str, 10);
+    terminal_writestring(time_str);
+    terminal_writestring("\n");
+    
+    // Format seconds
+    terminal_writestring("  Seconds: ");
+    itoa(current_seconds, time_str, 10);
+    terminal_writestring(time_str);
+    terminal_writestring("\n");
+    
+    // Also display formatted time
+    terminal_writestring("Formatted time: ");
+    time_str[0] = (current_hours / 10) + '0';
+    time_str[1] = (current_hours % 10) + '0';
+    time_str[2] = ':';
+    time_str[3] = (current_minutes / 10) + '0';
+    time_str[4] = (current_minutes % 10) + '0';
+    time_str[5] = ':';
+    time_str[6] = (current_seconds / 10) + '0';
+    time_str[7] = (current_seconds % 10) + '0';
+    time_str[8] = '\0';
+    terminal_writestring(time_str);
+    terminal_writestring("\n");
+}
+
 /* Modified kernel_main function */
 void kernel_main() {
     /* Initialize terminal interface */
     terminal_initialize();
-	terminal_setcolor(make_color(VGA_COLOR_GREEN, VGA_COLOR_BLACK));
-	hardware_specs_initialize();
+    terminal_setcolor(make_color(VGA_COLOR_GREEN, VGA_COLOR_BLACK));
+    hardware_specs_initialize();
+    
     /* Initialize keyboard and timer interrupts */
     init_keyboard();
+    
+    /* Initialize the real-time clock */
+    init_rtc();
 
     terminal_writestring("Hello, kernel World!\n");
     terminal_writestring("Initialization complete. Start typing commands...\n");

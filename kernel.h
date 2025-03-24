@@ -43,18 +43,9 @@ void itoa(int value, char* str, int base);
 void ultoa(unsigned long value, char* str, int base);
 int toupper(int c);
 
-/* Storage and Filesystem Functions */
-bool init_storage(void);
-void init_filesystem(void);
-int fat32_create(const char* filename);
-int fat32_open(const char* filename, uint8_t mode);
-int fat32_write(int handle, const void* buffer, uint32_t bytes_to_write);
-int fat32_read(int handle, void* buffer, uint32_t bytes_to_read);
-bool fat32_close(int handle);
-
-
-bool ide_read_sector(uint32_t lba, uint8_t* buffer);
-bool ide_write_sector(uint32_t lba, const uint8_t* buffer);
+// SATA drive functions
+void init_sata_drives();
+void cmd_list_sata_drives();
 
 /* String function declarations */
 char* strrchr(const char* str, int c);

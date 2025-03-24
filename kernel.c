@@ -893,6 +893,7 @@ void cmd_help() {
     terminal_writestring("  clear - Clear the screen\n");
     terminal_writestring("  hello - Display a greeting\n");
     terminal_writestring("  time  - Display the current time details\n");
+    terminal_writestring("  lsdrive - List SATA drives\n");
 }
 
 void cmd_clear() {
@@ -954,8 +955,10 @@ void kernel_main() {
     
     /* Initialize the real-time clock */
     init_rtc();
-
-    terminal_writestring("Hello, kernel World!\n");
+	
+	/* Initialize SATA drives */
+    init_sata_drives();
+	
     terminal_writestring("Initialization complete. Start typing commands...\n");
     
     /* Display initial prompt */

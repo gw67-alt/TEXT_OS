@@ -22,7 +22,28 @@ void* malloc(size_t size);
 void free(void* ptr);
 
 #endif /* UTILITY_H */
-
+void ultoa(uint64_t n, char* s, int b) {
+    int i = 0;
+    if (n == 0) {
+        s[0] = '0';
+        s[1] = '\0';
+        return;
+    }
+    while (n > 0) {
+        uint64_t remainder = n % b;
+        s[i++] = (remainder < 10) ? (remainder + '0') : (remainder - 10 + 'a');
+        n /= b;
+    }
+    s[i] = '\0';
+    // Reverse the string
+    int j;
+    char temp;
+    for (j = 0; j < i / 2; j++) {
+        temp = s[j];
+        s[j] = s[i - 1 - j];
+        s[i - 1 - j] = temp;
+    }
+}
 
 /* Memory allocation functions for our implementation */
 void* malloc(size_t size) {

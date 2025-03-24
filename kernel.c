@@ -585,20 +585,6 @@ void process_command() {
         cmd_clear();
     } else if (strcmp(cmd, "hello")) {
         cmd_hello();
-    } else if (strcmp(cmd, "scroll")) {
-        cmd_test_scroll();
-    } else if (strcmp(cmd, "fsinfo")) {
-        cmd_fsinfo();
-    } else if (strcmp(cmd, "ls")) {
-        cmd_ls();
-    } else if (strncmp(cmd, "cat ", 4)) {
-        cmd_cat();
-    } else if (strncmp(cmd, "write ", 6)) {
-        cmd_write();
-    } else if (strncmp(cmd, "mkdir ", 6)) {
-        cmd_mkdir();
-    } else if (strncmp(cmd, "rm ", 3)) {
-        cmd_rm();
     } else {
         terminal_writestring("Unknown command: ");
         terminal_writestring(cmd);
@@ -639,7 +625,6 @@ void kernel_main() {
     init_keyboard();
 
     terminal_writestring("Hello, kernel World!\n");
-    terminal_writestring("Terminal now has scrolling support!\n");
     
     // Initialize filesystem
     init_filesystem();

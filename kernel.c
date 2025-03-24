@@ -606,19 +606,20 @@ void process_command() {
     }
 }
 
-/* Command implementations */
+
+// Updated help command to include file system commands
 void cmd_help() {
     terminal_writestring("Available commands:\n");
     terminal_writestring("  help    - Show this help message\n");
     terminal_writestring("  clear   - Clear the screen\n");
     terminal_writestring("  hello   - Display a greeting\n");
-    terminal_writestring("  scroll  - Test scrolling functionality\n");
     terminal_writestring("  fsinfo  - Display filesystem information\n");
     terminal_writestring("  ls      - List files in root directory\n");
     terminal_writestring("  cat <file> - Display file contents\n");
     terminal_writestring("  write <file> <content> - Write to a file\n");
-    terminal_writestring("  mkdir <n> - Create a directory\n");
+    terminal_writestring("  mkdir <name> - Create a directory\n");
     terminal_writestring("  rm <file> - Delete a file or empty directory\n");
+    terminal_writestring("  freespace - Display free space on the filesystem\n");
 }
 
 void cmd_clear() {

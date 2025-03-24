@@ -2,6 +2,7 @@
 #define UTILITY_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 // String functions
 size_t strlen(const char* str);
@@ -16,7 +17,12 @@ void* memset(void* s, int c, size_t n);
 // Conversion functions
 void itoa(int value, char* str, int base);
 
+// Memory allocation functions for our implementation
+void* malloc(size_t size);
+void free(void* ptr);
+
 #endif /* UTILITY_H */
+
 
 /* Memory allocation functions for our implementation */
 void* malloc(size_t size) {
@@ -25,14 +31,17 @@ void* malloc(size_t size) {
     static uint8_t memory_pool[16384]; // 16KB memory pool
     static size_t next_free = 0;
     
+    // Align size to the nearest multiple of 4 bytes
+    size = (size + 3) & ~3;
+    
+    // Check for out of memory before incrementing next_free
+    if (next_free + size > sizeof(memory_pool)) {
+        return NULL;
+    }
+    
     // Simple bump allocator - no free functionality
     void* ptr = memory_pool + next_free;
     next_free += size;
-    
-    // Check for out of memory
-    if (next_free > sizeof(memory_pool)) {
-        return NULL;
-    }
     
     return ptr;
 }
@@ -97,4 +106,41 @@ char* strchr(const char* str, char ch) {
     }
     
     return (*str == ch) ? (char*)str : NULL;
+}
+
+void itoa(int value, char* str, int base) {
+    static const char digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    
+    char* ptr = str;
+    bool negative = false;
+    
+    // Handle negative numbers
+    if (value < 0 && base == 10) {
+        negative = true;
+        value = -value;
+    }
+    
+    // Store digits in reverse order
+    do {
+        *ptr++ = digits[value % base];
+        value /= base;
+    } while (value);
+    
+    // Add negative sign if needed
+    if (negative) {
+        *ptr++ = '-';
+    }
+    
+    // Terminate the string
+    *ptr = '\0';
+    
+    // Reverse the string
+    ptr--;
+    char* start = str;
+    char temp;
+    while (start < ptr) {
+        temp = *start;
+        *start++ = *ptr;
+        *ptr-- = temp;
+    }
 }

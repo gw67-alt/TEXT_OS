@@ -13,14 +13,6 @@ extern void cmd_help();
 extern void cmd_clear();
 extern void cmd_hello();
 
-/* Forward declarations of our functions */
-void* malloc(size_t size);
-void free(void* ptr);
-void* memcpy(void* dest, const void* src, size_t n);
-void* memset(void* s, int c, size_t n);
-bool strncmp(const char* s1, const char* s2, size_t n);
-char* strchr(const char* str, char ch);
-void itoa(int value, char* str, int base);
 
 /* ATA I/O ports */
 #define ATA_PRIMARY_DATA         0x1F0
@@ -591,64 +583,28 @@ void fat32_str_to_83(const char* str, fat32_dir_entry_t* entry) {
     }
 }
 
-// Simple integer to ASCII string conversion
-void itoa(int value, char* str, int base) {
-    static const char digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    
-    char* ptr = str;
-    bool negative = false;
-    
-    // Handle negative numbers
-    if (value < 0 && base == 10) {
-        negative = true;
-        value = -value;
-    }
-    
-    // Store digits in reverse order
-    do {
-        *ptr++ = digits[value % base];
-        value /= base;
-    } while (value);
-    
-    // Add negative sign if needed
-    if (negative) {
-        *ptr++ = '-';
-    }
-    
-    // Terminate the string
-    *ptr = '\0';
-    
-    // Reverse the string
-    ptr--;
-    char* start = str;
-    char temp;
-    while (start < ptr) {
-        temp = *start;
-        *start++ = *ptr;
-        *ptr-- = temp;
-    }
-}
-
 // Find a file in a directory by name
 bool fat32_find_file(uint32_t dir_cluster, const char* filename, fat32_dir_entry_t* entry) {
     uint8_t* cluster_buffer = (uint8_t*)malloc(fat32_fs.bytes_per_cluster);
     if (!cluster_buffer) {
+        terminal_writestring("Memory allocation failed\n");
         return false;
     }
-    
+
     uint32_t current_cluster = dir_cluster;
-    
+
     while (current_cluster >= 2 && current_cluster < FAT32_EOC) {
         // Read the current directory cluster
         if (!fat32_read_cluster(current_cluster, cluster_buffer)) {
+            terminal_writestring("Failed to read directory cluster\n");
             free(cluster_buffer);
             return false;
         }
-        
+
         // Scan entries in this cluster
         for (uint32_t offset = 0; offset < fat32_fs.bytes_per_cluster; offset += sizeof(fat32_dir_entry_t)) {
             fat32_dir_entry_t* dir_entry = (fat32_dir_entry_t*)(cluster_buffer + offset);
-            
+
             // Skip free entries and long filename entries
             if (dir_entry->name[0] == 0) {
                 // End of directory
@@ -657,11 +613,11 @@ bool fat32_find_file(uint32_t dir_cluster, const char* filename, fat32_dir_entry
             if (dir_entry->name[0] == 0xE5 || dir_entry->attributes == FAT_ATTR_LFN) {
                 continue;
             }
-            
+
             // Convert entry name to string
             char entry_name[13];
             fat32_83_to_str(dir_entry, entry_name);
-            
+
             // Compare with target
             if (strcmp(entry_name, filename)) {
                 // Found it!
@@ -672,24 +628,39 @@ bool fat32_find_file(uint32_t dir_cluster, const char* filename, fat32_dir_entry
                 return true;
             }
         }
-        
+
         // Move to next cluster in chain
         current_cluster = fat32_read_fat_entry(current_cluster);
     }
-    
+
     free(cluster_buffer);
     return false;
 }
-
 // Open a file by name
 int fat32_open(const char* filename) {
     fat32_dir_entry_t entry;
-    
+
+    terminal_writestring("Opening file: ");
+    terminal_writestring(filename);
+    terminal_writestring("\n");
+
     // Find the file in the root directory
     if (!fat32_find_file(fat32_fs.root_dir_cluster, filename, &entry)) {
+        terminal_writestring("File not found in root directory\n");
         return -1; // File not found
     }
-    
+
+    terminal_writestring("File found. Directory entry details:\n");
+    terminal_writestring("  File size: ");
+    char buffer[16];
+    itoa(entry.file_size, buffer, 10);
+    terminal_writestring(buffer);
+    terminal_writestring(" bytes\n");
+    terminal_writestring("  First cluster: ");
+    itoa((entry.cluster_high << 16) | entry.cluster_low, buffer, 10);
+    terminal_writestring(buffer);
+    terminal_writestring("\n");
+
     // Find a free file handle
     int handle = -1;
     for (int i = 0; i < MAX_OPEN_FILES; i++) {
@@ -698,11 +669,12 @@ int fat32_open(const char* filename) {
             break;
         }
     }
-    
+
     if (handle == -1) {
+        terminal_writestring("No free file handles available\n");
         return -2; // No free handles
     }
-    
+
     // Set up the file handle
     open_files[handle].in_use = true;
     open_files[handle].first_cluster = (entry.cluster_high << 16) | entry.cluster_low;
@@ -710,10 +682,18 @@ int fat32_open(const char* filename) {
     open_files[handle].current_position = 0;
     open_files[handle].file_size = entry.file_size;
     open_files[handle].is_directory = (entry.attributes & FAT_ATTR_DIRECTORY) != 0;
-    
+
+    terminal_writestring("File opened successfully\n");
+    terminal_writestring("  First cluster: ");
+    itoa(open_files[handle].first_cluster, buffer, 10);
+    terminal_writestring(buffer);
+    terminal_writestring("\n  File size: ");
+    itoa(open_files[handle].file_size, buffer, 10);
+    terminal_writestring(buffer);
+    terminal_writestring(" bytes\n");
+
     return handle;
 }
-
 // Close a file
 void fat32_close(int handle) {
     if (handle >= 0 && handle < MAX_OPEN_FILES) {
@@ -785,28 +765,27 @@ uint32_t fat32_read(int handle, void* buffer, uint32_t size) {
     free(cluster_buffer);
     return bytes_read;
 }
-// Write data to a file
 uint32_t fat32_write(int handle, const void* buffer, uint32_t size) {
     if (handle < 0 || handle >= MAX_OPEN_FILES || !open_files[handle].in_use) {
         terminal_writestring("Invalid file handle\n");
         return 0;
     }
-    
+
     fat32_file_handle_t* file = &open_files[handle];
     uint32_t bytes_written = 0;
     const uint8_t* src = (const uint8_t*)buffer;
-    
+
     // Temporary buffer for cluster data
     uint8_t* cluster_buffer = (uint8_t*)malloc(fat32_fs.bytes_per_cluster);
     if (!cluster_buffer) {
         terminal_writestring("Memory allocation failed for cluster buffer\n");
         return 0;
     }
-    
+
     while (size > 0) {
         // Calculate position within current cluster
         uint32_t cluster_offset = file->current_position % fat32_fs.bytes_per_cluster;
-        
+
         // If we've reached the end of the current cluster, move to the next one
         if (cluster_offset == 0 && file->current_position > 0) {
             uint32_t next_cluster = fat32_read_fat_entry(file->current_cluster);
@@ -819,7 +798,7 @@ uint32_t fat32_write(int handle, const void* buffer, uint32_t size) {
                     free(cluster_buffer);
                     return bytes_written;
                 }
-                
+
                 // Link the new cluster to the chain
                 if (!fat32_write_fat_entry(file->current_cluster, next_cluster)) {
                     terminal_writestring("Failed to link new cluster to the chain\n");
@@ -829,7 +808,7 @@ uint32_t fat32_write(int handle, const void* buffer, uint32_t size) {
             }
             file->current_cluster = next_cluster;
         }
-        
+
         // If we need to modify partial cluster data, first read the existing cluster
         if (cluster_offset > 0 || fat32_fs.bytes_per_cluster - cluster_offset > size) {
             if (!fat32_read_cluster(file->current_cluster, cluster_buffer)) {
@@ -838,44 +817,44 @@ uint32_t fat32_write(int handle, const void* buffer, uint32_t size) {
                 return bytes_written;
             }
         }
-        
+
         // Determine how many bytes to write to this cluster
         uint32_t bytes_to_write = fat32_fs.bytes_per_cluster - cluster_offset;
         if (bytes_to_write > size) {
             bytes_to_write = size;
         }
-        
+
         // Copy the data to the cluster buffer
         memcpy(cluster_buffer + cluster_offset, src, bytes_to_write);
-        
+
         // Write the cluster back to disk
         if (!fat32_write_cluster(file->current_cluster, cluster_buffer)) {
             terminal_writestring("Failed to write cluster to disk\n");
             free(cluster_buffer);
             return bytes_written;
         }
-        
+
         // Update counters
         src += bytes_to_write;
         file->current_position += bytes_to_write;
         bytes_written += bytes_to_write;
         size -= bytes_to_write;
-        
+
         // Update file size if necessary
         if (file->current_position > file->file_size) {
             file->file_size = file->current_position;
         }
     }
-    
+
     free(cluster_buffer);
-    
+
     // Debug output to verify file size and clusters used
     terminal_writestring("File write complete. File size: ");
     char size_str[16];
     itoa(file->file_size, size_str, 10);
     terminal_writestring(size_str);
     terminal_writestring(" bytes\n");
-    
+
     terminal_writestring("Clusters used: ");
     uint32_t cluster = file->first_cluster;
     while (cluster < FAT32_EOC) {
@@ -886,7 +865,7 @@ uint32_t fat32_write(int handle, const void* buffer, uint32_t size) {
         cluster = fat32_read_fat_entry(cluster);
     }
     terminal_writestring("\n");
-    
+
     return bytes_written;
 }
 
@@ -1165,6 +1144,24 @@ bool fat32_delete(const char* filename) {
     return entry_deleted;
 }
 
+// Calculate free space on the FAT32 filesystem
+uint32_t fat32_get_free_space() {
+    uint32_t free_clusters = 0;
+
+    // Iterate over the FAT and count free clusters
+    for (uint32_t cluster = 2; cluster < fat32_fs.bpb.total_sectors_32 / fat32_fs.sectors_per_cluster; cluster++) {
+        if (fat32_read_fat_entry(cluster) == FAT32_FREE_CLUSTER) {
+            free_clusters++;
+        }
+    }
+
+    // Convert free clusters to bytes
+    uint32_t free_space = free_clusters * fat32_fs.bytes_per_cluster;
+
+    return free_space;
+}
+
+
 // List files in the root directory
 void fat32_list_root() {
     uint8_t* cluster_buffer = (uint8_t*)malloc(fat32_fs.bytes_per_cluster);
@@ -1258,6 +1255,18 @@ void fat32_list_root() {
     free(cluster_buffer);
 }
 
+
+// Command to display free space
+void cmd_freespace() {
+    uint32_t free_space = fat32_get_free_space();
+    terminal_writestring("Free space: ");
+    char size_str[16];
+    itoa(free_space, size_str, 10);
+    terminal_writestring(size_str);
+    terminal_writestring(" bytes\n");
+}
+
+
 /* Command implementations for FAT32 */
 void cmd_fsinfo() {
     char buffer[16];
@@ -1320,6 +1329,7 @@ void cmd_ls() {
     fat32_list_root();
 }
 
+
 void cmd_cat() {
     // Extract the filename from the command buffer
     char filename[13];
@@ -1339,7 +1349,7 @@ void cmd_cat() {
     }
     
     // Read and display file contents
-    uint8_t* buffer = (uint8_t*)malloc(512);
+    uint8_t* buffer = (uint8_t*)malloc(512); // Allocate a buffer for reading
     if (!buffer) {
         terminal_writestring("Error: Memory allocation failed\n");
         fat32_close(handle);
@@ -1348,15 +1358,14 @@ void cmd_cat() {
     
     uint32_t bytes_read;
     do {
-        bytes_read = fat32_read(handle, buffer, 511);
-        buffer[bytes_read] = '\0';
-        terminal_writestring((char*)buffer);
+        bytes_read = fat32_read(handle, buffer, 511); // Read up to 511 bytes
+        buffer[bytes_read] = '\0'; // Null-terminate the buffer
+        terminal_writestring((char*)buffer); // Display the buffer
     } while (bytes_read > 0);
     
-    free(buffer);
-    fat32_close(handle);
+    free(buffer); // Free the allocated buffer
+    fat32_close(handle); // Close the file handle
 }
-
 void cmd_write() {
     char* space_pos = strchr(command_buffer + 6, ' ');
     if (!space_pos) {
@@ -1526,57 +1535,8 @@ void cmd_readsector() {
     
     free(buffer);
 }
-// Updated process_command function to include new commands
-void update_process_command() {
-    // This will replace your existing process_command function
-    // Add null terminator to command
-    command_buffer[command_length] = '\0';
-    
-    // Skip to first non-space character
-    char* cmd = command_buffer;
-    while (*cmd == ' ') cmd++;
-    
-    // Check commands
-    if (strcmp(cmd, "help")) {
-        cmd_help();
-    } else if (strcmp(cmd, "clear")) {
-        cmd_clear();
-    } else if (strcmp(cmd, "hello")) {
-        cmd_hello();
-    } else if (strcmp(cmd, "fsinfo")) {
-        cmd_fsinfo();
-    } else if (strcmp(cmd, "ls")) {
-        cmd_ls();
-    } else if (strncmp(cmd, "cat ", 4)) {
-        cmd_cat();
-    } else if (strncmp(cmd, "write ", 6)) {
-        cmd_write();
-    } else if (strncmp(cmd, "mkdir ", 6)) {
-        cmd_mkdir();
-    } else if (strncmp(cmd, "rm ", 3)) {
-        cmd_rm();
-    } else if (strncmp(cmd, "readsector ", 11)) {
-		cmd_readsector();
-	} else {
-        terminal_writestring("Unknown command: ");
-        terminal_writestring(cmd);
-        terminal_writestring("\n");
-    }
-}
 
-// Updated help command to include file system commands
-void update_cmd_help() {
-    terminal_writestring("Available commands:\n");
-    terminal_writestring("  help    - Show this help message\n");
-    terminal_writestring("  clear   - Clear the screen\n");
-    terminal_writestring("  hello   - Display a greeting\n");
-    terminal_writestring("  fsinfo  - Display filesystem information\n");
-    terminal_writestring("  ls      - List files in root directory\n");
-    terminal_writestring("  cat <file> - Display file contents\n");
-    terminal_writestring("  write <file> <content> - Write to a file\n");
-    terminal_writestring("  mkdir <name> - Create a directory\n");
-    terminal_writestring("  rm <file> - Delete a file or empty directory\n");
-}
+
 
 // Entry point to initialize filesystem - call this from your kernel_main
 void init_filesystem() {

@@ -105,6 +105,24 @@ void disable_hardware_cursor() {
     outb(0x3D5, 0x20);  // Bit 5 disables the cursor
 }
 
+/* Scroll the screen up by one line */
+void terminal_scroll() {
+    // Move all lines up by one line
+    for (size_t y = 0; y < VGA_HEIGHT - 1; y++) {
+        for (size_t x = 0; x < VGA_WIDTH; x++) {
+            const size_t dest_index = y * VGA_WIDTH + x;
+            const size_t src_index = (y + 1) * VGA_WIDTH + x;
+            terminal_buffer[dest_index] = terminal_buffer[src_index];
+        }
+    }
+    
+    // Clear the last line
+    for (size_t x = 0; x < VGA_WIDTH; x++) {
+        const size_t index = (VGA_HEIGHT - 1) * VGA_WIDTH + x;
+        terminal_buffer[index] = make_vgaentry(' ', terminal_color);
+    }
+}
+
 void clear_screen() {
     for (size_t y = 0; y < VGA_HEIGHT; y++) {
         for (size_t x = 0; x < VGA_WIDTH; x++) {
@@ -147,8 +165,12 @@ void terminal_putchar(char c) {
     if (c == '\n') {
         // Handle newline character
         terminal_column = 0;
-        if (++terminal_row == VGA_HEIGHT) {
-            terminal_row = 0;
+        terminal_row++;
+        
+        // If we reached the bottom, scroll instead of wrapping
+        if (terminal_row == VGA_HEIGHT) {
+            terminal_scroll();
+            terminal_row = VGA_HEIGHT - 1;
         }
     } else if (c == '\b') {
         // Handle backspace character
@@ -167,10 +189,17 @@ void terminal_putchar(char c) {
         }
     } else {
         terminal_putentryat(c, terminal_color, terminal_column, terminal_row);
-        if (++terminal_column == VGA_WIDTH) {
+        terminal_column++;
+        
+        // Handle line wrapping
+        if (terminal_column == VGA_WIDTH) {
             terminal_column = 0;
-            if (++terminal_row == VGA_HEIGHT) {
-                terminal_row = 0;
+            terminal_row++;
+            
+            // If we reached the bottom, scroll instead of wrapping
+            if (terminal_row == VGA_HEIGHT) {
+                terminal_scroll();
+                terminal_row = VGA_HEIGHT - 1;
             }
         }
     }
@@ -446,7 +475,43 @@ bool command_ready = false;
 void cmd_help();
 void cmd_clear();
 void cmd_hello();
+void cmd_test_scroll();
 void process_command();
+
+/* Test the scrolling functionality */
+void cmd_test_scroll() {
+    terminal_writestring("Testing scrolling functionality...\n");
+    
+    for (int i = 1; i <= 30; i++) {
+        char buffer[64];
+        char num_str[16];
+        
+        // Build the string manually
+        memcpy(buffer, "This is line ", 13);
+        itoa(i, num_str, 10);
+        
+        // Calculate lengths
+        size_t prefix_len = 13;
+        size_t num_len = strlen(num_str);
+        
+        // Append number
+        memcpy(buffer + prefix_len, num_str, num_len);
+        
+        // Append rest of message
+        memcpy(buffer + prefix_len + num_len, " of the scrolling test.\n", 25);
+        
+        // Null-terminate
+        buffer[prefix_len + num_len + 25] = '\0';
+        
+        // Display the line
+        terminal_writestring(buffer);
+        
+        // Add a small delay to make the scrolling visible
+        for (volatile int j = 0; j < 5000000; j++);
+    }
+    
+    terminal_writestring("Scroll test complete!\n");
+}
 
 /* Keyboard handler with integrated command processing */
 void keyboard_handler() {
@@ -520,6 +585,8 @@ void process_command() {
         cmd_clear();
     } else if (strcmp(cmd, "hello")) {
         cmd_hello();
+    } else if (strcmp(cmd, "scroll")) {
+        cmd_test_scroll();
     } else if (strcmp(cmd, "fsinfo")) {
         cmd_fsinfo();
     } else if (strcmp(cmd, "ls")) {
@@ -545,6 +612,7 @@ void cmd_help() {
     terminal_writestring("  help    - Show this help message\n");
     terminal_writestring("  clear   - Clear the screen\n");
     terminal_writestring("  hello   - Display a greeting\n");
+    terminal_writestring("  scroll  - Test scrolling functionality\n");
     terminal_writestring("  fsinfo  - Display filesystem information\n");
     terminal_writestring("  ls      - List files in root directory\n");
     terminal_writestring("  cat <file> - Display file contents\n");
@@ -570,11 +638,13 @@ void kernel_main() {
     init_keyboard();
 
     terminal_writestring("Hello, kernel World!\n");
+    terminal_writestring("Terminal now has scrolling support!\n");
     
     // Initialize filesystem
     init_filesystem();
     
     terminal_writestring("Type 'help' for a list of commands\n");
+    terminal_writestring("Type 'scroll' to test scrolling functionality\n");
     
     // Display initial prompt
     terminal_writestring("> ");

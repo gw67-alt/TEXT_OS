@@ -73,7 +73,6 @@ static inline uint16_t inw(uint16_t port) {
 static inline void outw(uint16_t port, uint16_t val) {
     __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"(port));
 }
-
 /* Wait for ATA drive to be ready */
 void ata_wait_ready() {
     while (inb(ATA_PRIMARY_STATUS) & ATA_STATUS_BUSY);
@@ -90,43 +89,6 @@ bool ata_wait_data() {
             return false;
     } while (!(status & ATA_STATUS_DRQ));
     
-    return true;
-}
-
-/* Initialize ATA drive */
-bool ata_init() {
-    terminal_writestring("Initializing ATA drive...\n");
-    
-    // Select master drive
-    outb(ATA_PRIMARY_DRIVE_SELECT, ATA_DRIVE_MASTER);
-    
-    // Wait for drive to be ready
-    ata_wait_ready();
-    
-    // Send IDENTIFY command
-    outb(ATA_PRIMARY_COMMAND, ATA_CMD_IDENTIFY);
-    
-    // Wait for drive to be ready again
-    ata_wait_ready();
-    
-    // Check if drive exists by reading status
-    if (inb(ATA_PRIMARY_STATUS) == 0) {
-        terminal_writestring("No ATA drive detected\n");
-        return false;
-    }
-    
-    // Wait for data to be ready
-    if (!ata_wait_data()) {
-        terminal_writestring("ATA drive error\n");
-        return false;
-    }
-    
-    // Read the IDENTIFY data (not used for now, just clear the buffer)
-    for (int i = 0; i < 256; i++) {
-        inw(ATA_PRIMARY_DATA);
-    }
-    
-    terminal_writestring("ATA drive detected and initialized\n");
     return true;
 }
 
@@ -159,6 +121,76 @@ bool ata_read_sector(uint32_t lba, uint8_t* buffer) {
         buffer[i*2+1] = (data >> 8) & 0xFF;
     }
     
+    return true;
+}
+/* Enhanced ATA init function with debugging */
+bool ata_init() {
+    terminal_writestring("Initializing ATA drive...\n");
+    
+    // Select master drive
+    outb(ATA_PRIMARY_DRIVE_SELECT, ATA_DRIVE_MASTER);
+    
+    // Wait for drive to be ready
+    terminal_writestring("  Waiting for drive to be ready...\n");
+    ata_wait_ready();
+    
+    // Send IDENTIFY command
+    terminal_writestring("  Sending IDENTIFY command...\n");
+    outb(ATA_PRIMARY_COMMAND, ATA_CMD_IDENTIFY);
+    
+    // Check status immediately (some virtual drives respond immediately)
+    uint8_t status = inb(ATA_PRIMARY_STATUS);
+    terminal_writestring("  Initial status: 0x");
+    char hex_str[3];
+    hex_str[0] = "0123456789ABCDEF"[(status >> 4) & 0xF];
+    hex_str[1] = "0123456789ABCDEF"[status & 0xF];
+    hex_str[2] = '\0';
+    terminal_writestring(hex_str);
+    terminal_writestring("\n");
+    
+    // Wait for drive to be ready again
+    terminal_writestring("  Waiting for drive to be ready again...\n");
+    ata_wait_ready();
+    
+    // Check if drive exists by reading status
+    status = inb(ATA_PRIMARY_STATUS);
+    terminal_writestring("  Status after ready: 0x");
+    hex_str[0] = "0123456789ABCDEF"[(status >> 4) & 0xF];
+    hex_str[1] = "0123456789ABCDEF"[status & 0xF];
+    hex_str[2] = '\0';
+    terminal_writestring(hex_str);
+    terminal_writestring("\n");
+    
+    if (status == 0) {
+        terminal_writestring("No ATA drive detected (status = 0)\n");
+        return false;
+    }
+    
+    // Wait for data to be ready
+    terminal_writestring("  Waiting for data to be ready...\n");
+    if (!ata_wait_data()) {
+        terminal_writestring("ATA drive error - data not ready\n");
+        return false;
+    }
+    
+    // Read the IDENTIFY data (for debugging, print some of it)
+    terminal_writestring("  Reading IDENTIFY data...\n");
+    uint16_t identify_data[256];
+    for (int i = 0; i < 256; i++) {
+        identify_data[i] = inw(ATA_PRIMARY_DATA);
+    }
+    
+    // Print model number from IDENTIFY data (bytes 54-93, words 27-46)
+    terminal_writestring("  Drive model: ");
+    for (int i = 27; i < 47; i++) {
+        char c1 = (identify_data[i] >> 8) & 0xFF;
+        char c2 = identify_data[i] & 0xFF;
+        if (c1 >= 32 && c1 < 127) terminal_putchar(c1);
+        if (c2 >= 32 && c2 < 127) terminal_putchar(c2);
+    }
+    terminal_writestring("\n");
+    
+    terminal_writestring("ATA drive detected and initialized\n");
     return true;
 }
 
@@ -367,26 +399,52 @@ uint32_t fat32_allocate_cluster() {
     // No free clusters found
     return 0;
 }
-
-// Initialize the FAT32 filesystem
+/* Modified FAT32 init to handle different boot signatures */
 bool fat32_init() {
     terminal_writestring("Initializing FAT32 filesystem...\n");
     
     // Read the boot sector (BPB)
-    if (!ata_read_sector(0, (uint8_t*)&fat32_fs.bpb)) {
+    if (!ata_read_sector(1, (uint8_t*)&fat32_fs.bpb)) {
         terminal_writestring("Failed to read boot sector\n");
         return false;
     }
     
-    // Check for FAT32 signature
+    // Print first few bytes of boot sector for debugging
+    terminal_writestring("Boot sector bytes: ");
+    uint8_t* boot_bytes = (uint8_t*)&fat32_fs.bpb;
+    for (int i = 0; i < 16; i++) {
+        char hex_str[3];
+        hex_str[0] = "0123456789ABCDEF"[(boot_bytes[i] >> 4) & 0xF];
+        hex_str[1] = "0123456789ABCDEF"[boot_bytes[i] & 0xF];
+        hex_str[2] = '\0';
+        terminal_writestring(hex_str);
+        terminal_writestring(" ");
+    }
+    terminal_writestring("\n");
+    
+    // Check for FAT32 signature (be more lenient here)
     if (fat32_fs.bpb.boot_signature != 0x29) {
-        terminal_writestring("Invalid boot signature\n");
-        return false;
+        terminal_writestring("Warning: Non-standard boot signature: 0x");
+        char hex_str[3];
+        hex_str[0] = "0123456789ABCDEF"[(fat32_fs.bpb.boot_signature >> 4) & 0xF];
+        hex_str[1] = "0123456789ABCDEF"[fat32_fs.bpb.boot_signature & 0xF];
+        hex_str[2] = '\0';
+        terminal_writestring(hex_str);
+        terminal_writestring("\n");
+        
+        // Continue anyway - just a warning
     }
     
-    // Basic sanity checks
+    // Basic sanity checks - be more informative
     if (fat32_fs.bpb.bytes_per_sector != SECTOR_SIZE) {
-        terminal_writestring("Unexpected sector size\n");
+        terminal_writestring("Unexpected sector size: ");
+        char size_str[16];
+        itoa(fat32_fs.bpb.bytes_per_sector, size_str, 10);
+        terminal_writestring(size_str);
+        terminal_writestring(" (expected ");
+        itoa(SECTOR_SIZE, size_str, 10);
+        terminal_writestring(size_str);
+        terminal_writestring(")\n");
         return false;
     }
     
@@ -400,23 +458,58 @@ bool fat32_init() {
     fat32_fs.cluster_begin_lba = fat32_fs.fat_begin_lba + 
                              (fat32_fs.bpb.num_fats * fat32_fs.bpb.sectors_per_fat_32);
     
-    // Print filesystem information
+    // Print more detailed filesystem information
     terminal_writestring("FAT32 filesystem detected:\n");
+    
+    terminal_writestring("  Boot signature: 0x");
+    char hex_str[3];
+    hex_str[0] = "0123456789ABCDEF"[(fat32_fs.bpb.boot_signature >> 4) & 0xF];
+    hex_str[1] = "0123456789ABCDEF"[fat32_fs.bpb.boot_signature & 0xF];
+    hex_str[2] = '\0';
+    terminal_writestring(hex_str);
+    terminal_writestring("\n");
+    
+    terminal_writestring("  OEM Name: ");
+    char oem_name[9];
+    memcpy(oem_name, fat32_fs.bpb.oem_name, 8);
+    oem_name[8] = '\0';
+    terminal_writestring(oem_name);
+    terminal_writestring("\n");
+    
     terminal_writestring("  Bytes per sector: ");
-    // Convert to string and display
-    char bytes_str[16];
-    itoa(fat32_fs.bpb.bytes_per_sector, bytes_str, 10);
-    terminal_writestring(bytes_str);
+    char value_str[16];
+    itoa(fat32_fs.bpb.bytes_per_sector, value_str, 10);
+    terminal_writestring(value_str);
     terminal_writestring("\n");
     
     terminal_writestring("  Sectors per cluster: ");
-    itoa(fat32_fs.sectors_per_cluster, bytes_str, 10);
-    terminal_writestring(bytes_str);
+    itoa(fat32_fs.sectors_per_cluster, value_str, 10);
+    terminal_writestring(value_str);
+    terminal_writestring("\n");
+    
+    terminal_writestring("  Reserved sectors: ");
+    itoa(fat32_fs.bpb.reserved_sectors, value_str, 10);
+    terminal_writestring(value_str);
+    terminal_writestring("\n");
+    
+    terminal_writestring("  Number of FATs: ");
+    itoa(fat32_fs.bpb.num_fats, value_str, 10);
+    terminal_writestring(value_str);
     terminal_writestring("\n");
     
     terminal_writestring("  Root directory cluster: ");
-    itoa(fat32_fs.root_dir_cluster, bytes_str, 10);
-    terminal_writestring(bytes_str);
+    itoa(fat32_fs.root_dir_cluster, value_str, 10);
+    terminal_writestring(value_str);
+    terminal_writestring("\n");
+    
+    terminal_writestring("  FAT begin LBA: ");
+    itoa(fat32_fs.fat_begin_lba, value_str, 10);
+    terminal_writestring(value_str);
+    terminal_writestring("\n");
+    
+    terminal_writestring("  Cluster begin LBA: ");
+    itoa(fat32_fs.cluster_begin_lba, value_str, 10);
+    terminal_writestring(value_str);
     terminal_writestring("\n");
     
     return true;
@@ -631,6 +724,7 @@ void fat32_close(int handle) {
 // Read data from a file
 uint32_t fat32_read(int handle, void* buffer, uint32_t size) {
     if (handle < 0 || handle >= MAX_OPEN_FILES || !open_files[handle].in_use) {
+        terminal_writestring("Invalid file handle\n");
         return 0;
     }
     
@@ -646,6 +740,7 @@ uint32_t fat32_read(int handle, void* buffer, uint32_t size) {
     // Temporary buffer for cluster data
     uint8_t* cluster_buffer = (uint8_t*)malloc(fat32_fs.bytes_per_cluster);
     if (!cluster_buffer) {
+        terminal_writestring("Memory allocation failed for cluster buffer\n");
         return 0;
     }
     
@@ -658,6 +753,7 @@ uint32_t fat32_read(int handle, void* buffer, uint32_t size) {
             uint32_t next_cluster = fat32_read_fat_entry(file->current_cluster);
             if (next_cluster >= FAT32_EOC) {
                 // End of file chain
+                terminal_writestring("End of file chain\n");
                 break;
             }
             file->current_cluster = next_cluster;
@@ -665,6 +761,7 @@ uint32_t fat32_read(int handle, void* buffer, uint32_t size) {
         
         // Read the current cluster
         if (!fat32_read_cluster(file->current_cluster, cluster_buffer)) {
+            terminal_writestring("Failed to read cluster\n");
             free(cluster_buffer);
             return bytes_read;
         }
@@ -688,10 +785,10 @@ uint32_t fat32_read(int handle, void* buffer, uint32_t size) {
     free(cluster_buffer);
     return bytes_read;
 }
-
 // Write data to a file
 uint32_t fat32_write(int handle, const void* buffer, uint32_t size) {
     if (handle < 0 || handle >= MAX_OPEN_FILES || !open_files[handle].in_use) {
+        terminal_writestring("Invalid file handle\n");
         return 0;
     }
     
@@ -702,6 +799,7 @@ uint32_t fat32_write(int handle, const void* buffer, uint32_t size) {
     // Temporary buffer for cluster data
     uint8_t* cluster_buffer = (uint8_t*)malloc(fat32_fs.bytes_per_cluster);
     if (!cluster_buffer) {
+        terminal_writestring("Memory allocation failed for cluster buffer\n");
         return 0;
     }
     
@@ -717,12 +815,17 @@ uint32_t fat32_write(int handle, const void* buffer, uint32_t size) {
                 next_cluster = fat32_allocate_cluster();
                 if (next_cluster == 0) {
                     // Disk full
+                    terminal_writestring("Disk full, unable to allocate new cluster\n");
                     free(cluster_buffer);
                     return bytes_written;
                 }
                 
                 // Link the new cluster to the chain
-                fat32_write_fat_entry(file->current_cluster, next_cluster);
+                if (!fat32_write_fat_entry(file->current_cluster, next_cluster)) {
+                    terminal_writestring("Failed to link new cluster to the chain\n");
+                    free(cluster_buffer);
+                    return bytes_written;
+                }
             }
             file->current_cluster = next_cluster;
         }
@@ -730,6 +833,7 @@ uint32_t fat32_write(int handle, const void* buffer, uint32_t size) {
         // If we need to modify partial cluster data, first read the existing cluster
         if (cluster_offset > 0 || fat32_fs.bytes_per_cluster - cluster_offset > size) {
             if (!fat32_read_cluster(file->current_cluster, cluster_buffer)) {
+                terminal_writestring("Failed to read existing cluster\n");
                 free(cluster_buffer);
                 return bytes_written;
             }
@@ -746,6 +850,7 @@ uint32_t fat32_write(int handle, const void* buffer, uint32_t size) {
         
         // Write the cluster back to disk
         if (!fat32_write_cluster(file->current_cluster, cluster_buffer)) {
+            terminal_writestring("Failed to write cluster to disk\n");
             free(cluster_buffer);
             return bytes_written;
         }
@@ -763,6 +868,25 @@ uint32_t fat32_write(int handle, const void* buffer, uint32_t size) {
     }
     
     free(cluster_buffer);
+    
+    // Debug output to verify file size and clusters used
+    terminal_writestring("File write complete. File size: ");
+    char size_str[16];
+    itoa(file->file_size, size_str, 10);
+    terminal_writestring(size_str);
+    terminal_writestring(" bytes\n");
+    
+    terminal_writestring("Clusters used: ");
+    uint32_t cluster = file->first_cluster;
+    while (cluster < FAT32_EOC) {
+        char cluster_str[16];
+        itoa(cluster, cluster_str, 10);
+        terminal_writestring(cluster_str);
+        terminal_writestring(" ");
+        cluster = fat32_read_fat_entry(cluster);
+    }
+    terminal_writestring("\n");
+    
     return bytes_written;
 }
 
@@ -1320,7 +1444,88 @@ void cmd_rm() {
         terminal_writestring("Error deleting file\n");
     }
 }
-
+// Command to read raw sectors from disk
+void cmd_readsector() {
+    // Extract the sector number from the command
+    char sector_str[32];
+    int i = 11; // Skip "readsector "
+    int j = 0;
+    
+    while (command_buffer[i] && command_buffer[i] != ' ' && j < 31) {
+        sector_str[j++] = command_buffer[i++];
+    }
+    sector_str[j] = '\0';
+    
+    // Convert sector string to number
+    int sector = 0;
+    for (int k = 0; sector_str[k]; k++) {
+        if (sector_str[k] >= '0' && sector_str[k] <= '9') {
+            sector = sector * 10 + (sector_str[k] - '0');
+        } else {
+            terminal_writestring("Invalid sector number format\n");
+            return;
+        }
+    }
+    
+    // Allocate buffer for sector data
+    uint8_t* buffer = (uint8_t*)malloc(SECTOR_SIZE);
+    if (!buffer) {
+        terminal_writestring("Memory allocation failed\n");
+        return;
+    }
+    
+    // Read the sector
+    terminal_writestring("Reading sector ");
+    terminal_writestring(sector_str);
+    terminal_writestring("...\n");
+    
+    if (ata_read_sector(sector, buffer)) {
+        // Display sector data in hex and ASCII
+        for (int offset = 0; offset < SECTOR_SIZE; offset += 16) {
+            // Print offset
+            char offset_str[8];
+            itoa(offset, offset_str, 16);
+            terminal_writestring("0x");
+            terminal_writestring(offset_str);
+            terminal_writestring(": ");
+            
+            // Print hex values
+            for (int k = 0; k < 16 && offset + k < SECTOR_SIZE; k++) {
+                char hex_str[3];
+                hex_str[0] = "0123456789ABCDEF"[(buffer[offset + k] >> 4) & 0xF];
+                hex_str[1] = "0123456789ABCDEF"[buffer[offset + k] & 0xF];
+                hex_str[2] = '\0';
+                terminal_writestring(hex_str);
+                terminal_writestring(" ");
+            }
+            
+            // Print ASCII representation
+            terminal_writestring(" | ");
+            for (int k = 0; k < 16 && offset + k < SECTOR_SIZE; k++) {
+                char c = buffer[offset + k];
+                if (c >= 32 && c < 127) {
+                    terminal_putchar(c);
+                } else {
+                    terminal_putchar('.');
+                }
+            }
+            
+            terminal_writestring("\n");
+            
+            // Pause every 16 lines to prevent flooding
+            if ((offset % 256) == 240 && offset > 0) {
+                terminal_writestring("-- Press any key for more --\n");
+                // Here we'd ideally wait for a keypress
+                // For now, just display a subset of the data
+                if (offset >= 256) break;
+            }
+        }
+    } else {
+        terminal_writestring("Failed to read sector\n");
+    }
+    
+    free(buffer);
+}
 // Updated process_command function to include new commands
 void update_process_command() {
     // This will replace your existing process_command function
@@ -1350,7 +1555,9 @@ void update_process_command() {
         cmd_mkdir();
     } else if (strncmp(cmd, "rm ", 3)) {
         cmd_rm();
-    } else {
+    } else if (strncmp(cmd, "readsector ", 11)) {
+		cmd_readsector();
+	} else {
         terminal_writestring("Unknown command: ");
         terminal_writestring(cmd);
         terminal_writestring("\n");

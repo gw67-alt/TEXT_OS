@@ -1,3 +1,22 @@
+#ifndef UTILITY_H
+#define UTILITY_H
+
+#include <stddef.h>
+
+// String functions
+size_t strlen(const char* str);
+bool strcmp(const char* s1, const char* s2);
+bool strncmp(const char* s1, const char* s2, size_t n);
+char* strchr(const char* str, char ch);
+
+// Memory functions
+void* memcpy(void* dest, const void* src, size_t n);
+void* memset(void* s, int c, size_t n);
+
+// Conversion functions
+void itoa(int value, char* str, int base);
+
+#endif /* UTILITY_H */
 
 /* Memory allocation functions for our implementation */
 void* malloc(size_t size) {

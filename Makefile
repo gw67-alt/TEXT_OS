@@ -9,7 +9,8 @@ MAIN := main.img
 $(MAIN):
 	as -32 boot.S -o boot.o
 	gcc -c kernel.c -ffreestanding -m32 -o kernel.o -std=gnu99
-	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o -lgcc
+	gcc -c fat32.c -ffreestanding -m32 -o fat32.o -std=gnu99
+	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o fat32.o -lgcc
 	grub-mkrescue -o '$@' '$(ISODIR)'
 
 clean:

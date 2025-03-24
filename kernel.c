@@ -3,6 +3,7 @@
 #endif
 #include <stddef.h>
 #include <stdint.h>
+#include "utility.h"
 
 /* Check if the compiler thinks we are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -16,6 +17,16 @@
 #endif
 
 #define SCREEN_BACKUP_SIZE (80 * 25)  // Hardcoded VGA dimensions
+
+// Function declarations for FAT32 filesystem support
+void init_filesystem();
+void cmd_fsinfo();
+void cmd_ls();
+void cmd_cat();
+void cmd_write();
+void cmd_mkdir();
+void cmd_rm();
+
 
 /* Hardware text mode color constants. */
 enum vga_color {
@@ -47,21 +58,6 @@ uint16_t make_vgaentry(char c, uint8_t color) {
     return c16 | color16 << 8;
 }
 
-size_t strlen(const char* str) {
-    size_t ret = 0;
-    while (str[ret] != 0)
-        ret++;
-    return ret;
-}
-
-/* Compare two strings */
-bool strcmp(const char* s1, const char* s2) {
-    while (*s1 && (*s1 == *s2)) {
-        s1++;
-        s2++;
-    }
-    return *s1 == *s2;
-}
 
 static const size_t VGA_WIDTH = 80;
 static const size_t VGA_HEIGHT = 25;
@@ -510,24 +506,35 @@ void keyboard_handler() {
 
 /* Process the command in the buffer */
 void process_command() {
-    // Skip processing if buffer is empty
-    if (command_length == 0) {
-        return;
-    }
-    
-    // Null-terminate for string comparison
+    // Add null terminator to command
     command_buffer[command_length] = '\0';
     
-    // Check against known commands
-    if (strcmp(command_buffer, "help")) {
+    // Skip to first non-space character
+    char* cmd = command_buffer;
+    while (*cmd == ' ') cmd++;
+    
+    // Check commands
+    if (strcmp(cmd, "help")) {
         cmd_help();
-    } else if (strcmp(command_buffer, "clear")) {
+    } else if (strcmp(cmd, "clear")) {
         cmd_clear();
-    } else if (strcmp(command_buffer, "hello")) {
+    } else if (strcmp(cmd, "hello")) {
         cmd_hello();
+    } else if (strcmp(cmd, "fsinfo")) {
+        cmd_fsinfo();
+    } else if (strcmp(cmd, "ls")) {
+        cmd_ls();
+    } else if (strncmp(cmd, "cat ", 4)) {
+        cmd_cat();
+    } else if (strncmp(cmd, "write ", 6)) {
+        cmd_write();
+    } else if (strncmp(cmd, "mkdir ", 6)) {
+        cmd_mkdir();
+    } else if (strncmp(cmd, "rm ", 3)) {
+        cmd_rm();
     } else {
         terminal_writestring("Unknown command: ");
-        terminal_writestring(command_buffer);
+        terminal_writestring(cmd);
         terminal_writestring("\n");
     }
 }
@@ -535,9 +542,15 @@ void process_command() {
 /* Command implementations */
 void cmd_help() {
     terminal_writestring("Available commands:\n");
-    terminal_writestring("  help  - Show this help message\n");
-    terminal_writestring("  clear - Clear the screen\n");
-    terminal_writestring("  hello - Display a greeting\n");
+    terminal_writestring("  help    - Show this help message\n");
+    terminal_writestring("  clear   - Clear the screen\n");
+    terminal_writestring("  hello   - Display a greeting\n");
+    terminal_writestring("  fsinfo  - Display filesystem information\n");
+    terminal_writestring("  ls      - List files in root directory\n");
+    terminal_writestring("  cat <file> - Display file contents\n");
+    terminal_writestring("  write <file> <content> - Write to a file\n");
+    terminal_writestring("  mkdir <n> - Create a directory\n");
+    terminal_writestring("  rm <file> - Delete a file or empty directory\n");
 }
 
 void cmd_clear() {
@@ -550,22 +563,26 @@ void cmd_hello() {
 
 /* Modified kernel_main function */
 void kernel_main() {
-    /* Initialize terminal interface */
+    // Initialize terminal interface
     terminal_initialize();
 
-    /* Initialize keyboard and timer interrupts */
+    // Initialize keyboard and timer interrupts
     init_keyboard();
 
     terminal_writestring("Hello, kernel World!\n");
-    terminal_writestring("Initialization complete. Start typing commands...\n");
     
-    /* Display initial prompt */
+    // Initialize filesystem
+    init_filesystem();
+    
+    terminal_writestring("Type 'help' for a list of commands\n");
+    
+    // Display initial prompt
     terminal_writestring("> ");
     
-    /* Reset command buffer */
+    // Reset command buffer
     command_length = 0;
     
-    /* Main loop - just wait for interrupts */
+    // Main loop - just wait for interrupts
     while (1) {
         __asm__ volatile ("hlt");
     }

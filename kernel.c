@@ -441,12 +441,18 @@ void init_keyboard() {
     /* Enable interrupts */
     __asm__ volatile ("sti");
 }
-
 #define MAX_COMMAND_LENGTH 80
 char command_buffer[MAX_COMMAND_LENGTH];
 int command_length = 0;
+bool command_ready = false;
 
-/* Modify the keyboard_handler function to update the command buffer */
+// Function prototypes for command handlers
+void cmd_help();
+void cmd_clear();
+void cmd_hello();
+void process_command();
+
+/* Keyboard handler with integrated command processing */
 void keyboard_handler() {
     /* Read scancode from keyboard data port */
     uint8_t scancode = inb(0x60);
@@ -472,16 +478,24 @@ void keyboard_handler() {
     char key = scancode_to_ascii[scancode];
     if (key != 0) {
         if (key == '\n') {
+            // Enter key - process command
             terminal_putchar(key);
-            command_buffer[command_length++] = '\n';
             command_buffer[command_length] = '\0';
-            // Command processing will happen in kernel_main
+            
+            // Process the command immediately in the interrupt handler
+            process_command();
+            
+            // Reset for next command
+            command_length = 0;
+            terminal_writestring("> ");
         } else if (key == '\b') {
+            // Backspace - delete last character
             if (command_length > 0) {
                 terminal_putchar(key);
                 command_length--;
             }
         } else if (command_length < MAX_COMMAND_LENGTH - 1) {
+            // Regular character - add to buffer and display
             command_buffer[command_length++] = key;
             terminal_putchar(key);
         }
@@ -493,33 +507,48 @@ void keyboard_handler() {
     /* Send EOI to PIC */
     outb(0x20, 0x20);
 }
-/* Let's also add a helper function to handle insertion mode */
-void terminal_insert_char(char c) {
-    size_t index = terminal_row * VGA_WIDTH + terminal_column;
 
-    // Shift all characters to the right
-    for (size_t i = (VGA_HEIGHT * VGA_WIDTH - 1); i > index; i--) {
-        terminal_buffer[i] = terminal_buffer[i - 1];
+/* Process the command in the buffer */
+void process_command() {
+    // Skip processing if buffer is empty
+    if (command_length == 0) {
+        return;
     }
-
-    // Insert new character
-    terminal_buffer[index] = make_vgaentry(c, terminal_color);
-
-    // Move cursor forward
-    if (++terminal_column == VGA_WIDTH) {
-        terminal_column = 0;
-        if (++terminal_row == VGA_HEIGHT) {
-            terminal_row = 0;
-        }
+    
+    // Null-terminate for string comparison
+    command_buffer[command_length] = '\0';
+    
+    // Check against known commands
+    if (strcmp(command_buffer, "help")) {
+        cmd_help();
+    } else if (strcmp(command_buffer, "clear")) {
+        cmd_clear();
+    } else if (strcmp(command_buffer, "hello")) {
+        cmd_hello();
+    } else {
+        terminal_writestring("Unknown command: ");
+        terminal_writestring(command_buffer);
+        terminal_writestring("\n");
     }
-
-    update_hardware_cursor(terminal_column, terminal_row);
 }
 
-#if defined(__cplusplus)
-extern "C" /* Use C linkage for kernel_main. */
-#endif
+/* Command implementations */
+void cmd_help() {
+    terminal_writestring("Available commands:\n");
+    terminal_writestring("  help  - Show this help message\n");
+    terminal_writestring("  clear - Clear the screen\n");
+    terminal_writestring("  hello - Display a greeting\n");
+}
 
+void cmd_clear() {
+    clear_screen();
+}
+
+void cmd_hello() {
+    terminal_writestring("Hello, user!\n");
+}
+
+/* Modified kernel_main function */
 void kernel_main() {
     /* Initialize terminal interface */
     terminal_initialize();
@@ -529,47 +558,16 @@ void kernel_main() {
 
     terminal_writestring("Hello, kernel World!\n");
     terminal_writestring("Initialization complete. Start typing commands...\n");
-
-    while (1) {  // Main processing loop
-        terminal_writestring("> ");
-        command_length = 0;
-        command_buffer[0] = '\0';
-
-        bool command_complete = false;
-        while (!command_complete) {
-            // Check if newline was received
-            for (int i = 0; i < command_length; i++) {
-                if (command_buffer[i] == '\n') {
-                    command_complete = true;
-                    break;
-                }
-            }
-            
-            // Check for buffer overflow
-            if (command_length >= MAX_COMMAND_LENGTH - 1) {
-                terminal_writestring("\nCommand too long\n");
-                command_complete = true;
-            }
-        }
-
-        // Remove the trailing newline character
-        if (command_length > 0 && command_buffer[command_length - 1] == '\n') {
-            command_buffer[command_length - 1] = '\0';
-            command_length--;
-        }
-
-        if (command_length > 0) {
-            if (strcmp(command_buffer, "help")) {
-                terminal_writestring("Available commands: help, clear, hello\n");
-            } else if (strcmp(command_buffer, "clear")) {
-                clear_screen();
-            } else if (strcmp(command_buffer, "hello")) {
-                terminal_writestring("Hello, user!\n");
-            } else {
-                terminal_writestring("Unknown command: ");
-                terminal_writestring(command_buffer);
-                terminal_writestring("\n");
-            }
-        }
+    terminal_writestring("Command processing now handled directly in keyboard interrupt\n");
+    
+    /* Display initial prompt */
+    terminal_writestring("> ");
+    
+    /* Reset command buffer */
+    command_length = 0;
+    
+    /* Main loop - just wait for interrupts */
+    while (1) {
+        __asm__ volatile ("hlt");
     }
 }

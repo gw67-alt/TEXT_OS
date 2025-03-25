@@ -272,34 +272,117 @@ int snprintf(char* buffer, size_t n, const char* format, ...) {
 int vsprintf(char* buffer, const char* format, va_list args) {
     return vsnprintf(buffer, (size_t)-1, format, args);
 }
-// Completely rewired printf that bypasses terminal_writestring
+
+// Super simple printf - only handles %s, %d, %x and %c
 int printf(const char* format, ...) {
-    static char buffer[2048];
-    
-    // Clear the buffer first
-    for (size_t i = 0; i < sizeof(buffer); i++) {
-        buffer[i] = 0;
-    }
-    
     va_list args;
-    int ret;
-    
-    // Format the string
     va_start(args, format);
-    ret = vsnprintf(buffer, sizeof(buffer) - 1, format, args);
-    va_end(args);
+    int count = 0;
     
-    // Ensure null termination
-    buffer[sizeof(buffer) - 1] = '\0';
-    
-    // Directly output each character using terminal_putchar
-    // This ensures newlines are properly processed
-    for (size_t i = 0; buffer[i] != '\0'; i++) {
-        // Directly call terminal_putchar for each character including newlines
-        terminal_putchar(buffer[i]);
+    while (*format != '\0') {
+        if (*format == '%') {
+            format++;
+            
+            switch (*format) {
+                case 's': {
+                    const char* str = va_arg(args, const char*);
+                    if (str == NULL) str = "(null)";
+                    while (*str) {
+                        terminal_putchar(*str++);
+                        count++;
+                    }
+                    break;
+                }
+                case 'd': {
+                    int num = va_arg(args, int);
+                    if (num < 0) {
+                        terminal_putchar('-');
+                        count++;
+                        num = -num;
+                    }
+                    
+                    // Handle zero case
+                    if (num == 0) {
+                        terminal_putchar('0');
+                        count++;
+                        break;
+                    }
+                    
+                    // Convert to string
+                    char digits[12]; // Enough for 32-bit int
+                    int i = 0;
+                    while (num > 0) {
+                        digits[i++] = '0' + (num % 10);
+                        num /= 10;
+                    }
+                    
+                    // Print in reverse
+                    while (i > 0) {
+                        terminal_putchar(digits[--i]);
+                        count++;
+                    }
+                    break;
+                }
+                case 'x': {
+                    unsigned int num = va_arg(args, unsigned int);
+                    
+                    // Handle zero case
+                    if (num == 0) {
+                        terminal_putchar('0');
+                        count++;
+                        break;
+                    }
+                    
+                    // Convert to hex
+                    char digits[8]; // Enough for 32-bit hex
+                    int i = 0;
+                    while (num > 0) {
+                        unsigned int digit = num & 0xF;
+                        digits[i++] = digit < 10 ? '0' + digit : 'a' + (digit - 10);
+                        num >>= 4;
+                    }
+                    
+                    // Print in reverse
+                    while (i > 0) {
+                        terminal_putchar(digits[--i]);
+                        count++;
+                    }
+                    break;
+                }
+                case 'c': {
+                    // Note: char is promoted to int when passed through ...
+                    char c = va_arg(args, int);
+                    terminal_putchar(c);
+                    count++;
+                    break;
+                }
+                case '%': {
+                    terminal_putchar('%');
+                    count++;
+                    break;
+                }
+                default: {
+                    // Unknown format specifier, just output it
+                    terminal_putchar('%');
+                    terminal_putchar(*format);
+                    count += 2;
+                    break;
+                }
+            }
+        } else if (*format == '\n') {
+            // Handle newline specially for terminal
+            terminal_putchar('\n');
+            count += 2;
+        } else {
+            terminal_putchar(*format);
+            count++;
+        }
+        
+        format++;
     }
     
-    return ret;
+    va_end(args);
+    return count;
 }
 
 // Custom implementation of strstr function

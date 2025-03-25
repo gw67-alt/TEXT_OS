@@ -299,30 +299,6 @@ void enumerate_pci_devices() {
                 uint8_t prog_if = pci_config_read8(bus, device, function, PCI_PROG_IF);
                 uint8_t revision = pci_config_read8(bus, device, function, PCI_REVISION_ID);
                 uint8_t header_type = pci_config_read8(bus, device, function, PCI_HEADER_TYPE) & 0x7F;
-                /*
-                // Print device information
-                printf("Device %d: %02X:%02X.%d", 
-                        device_count, bus, device, function);
-				printf("\n");
-                printf("  Vendor: %s (0x%04X)", 
-                        pci_get_vendor_name(vendor_id), vendor_id);
-                printf("\n");
-                
-                printf("  Device ID: 0x%04X (Rev: 0x%02X)", 
-                        device_id, revision);
-                printf("\n");
-                
-                printf("  Class: %s (0x%02X:0x%02X)", 
-                        pci_get_device_type_name(class_code, subclass), 
-                        class_code, subclass);
-                printf("\n");
-                
-                printf("  Prog IF: 0x%02X, Header Type: 0x%02X", 
-                        prog_if, header_type);
-                */
-
-
-				
             }
         }
     }
@@ -362,8 +338,9 @@ uint32_t find_ahci_controller() {
                     // Get vendor and device IDs for debugging
                     uint16_t vendor = pci_config_read16(bus, device, function, PCI_VENDOR_ID);
                     uint16_t dev_id = pci_config_read16(bus, device, function, PCI_DEVICE_ID);
-                    printf("Vendor: %s (0x%X), Device: 0x%X\n", 
+                    printf("Vendor: %s (0x%x), Device: 0x%x", 
                             pci_get_vendor_name(vendor), vendor, dev_id);
+					printf("\n");
                     
                     
                     // Enable the controller
@@ -375,7 +352,7 @@ uint32_t find_ahci_controller() {
                     // Extract the base address (mask off the lower bits)
                     uint32_t abar = bar5 & 0xFFFFFFF0;
                     
-                    printf("AHCI Base Address: 0x%X\n", abar);
+                    printf("AHCI Base Address: 0x%x\n", abar);
                     
                     
                     return abar;

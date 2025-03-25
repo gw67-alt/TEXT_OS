@@ -66,7 +66,6 @@ void* memset(void* s, int c, size_t n);
 void* memcpy(void* dest, const void* src, size_t n);
 size_t strlen(const char* str);
 char* strcpy(char* dest, const char* src);
-bool strcmp(const char* s1, const char* s2);
 void itoa(int value, char* str, int base);
 void ultoa(unsigned long value, char* str, int base);
 int toupper(int c);
@@ -973,9 +972,9 @@ void kernel_main() {
     init_rtc();
 	
     enumerate_pci_devices();	
-	
+    ahci_disk_init();
     prinf("Initialization complete. Start typing commands...\n");
-    
+
     /* Display initial prompt */
     prinf("> ");
     

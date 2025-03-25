@@ -925,12 +925,6 @@ void kernel_main() {
 	
     enumerate_pci_devices();	
 
-	uint32_t abar = find_ahci_controller();
-    
-    if (abar != 0) {
-        // Identify disks connected to the AHCI controller
-        identify_disks(abar);
-    }    
 	printf("Initialization complete. Start typing commands...\n");
 
     /* Display initial prompt */

@@ -301,3 +301,28 @@ int printf(const char* format, ...) {
     
     return ret;
 }
+
+// Custom implementation of strstr function
+const char* strstr(const char* haystack, const char* needle) {
+    if (!haystack || !needle || !*needle) {
+        return haystack; // Return haystack for NULL pointers or empty needle
+    }
+    
+    while (*haystack) {
+        const char* h = haystack;
+        const char* n = needle;
+        
+        while (*h && *n && *h == *n) {
+            h++;
+            n++;
+        }
+        
+        if (!*n) { // We found the entire needle
+            return haystack;
+        }
+        
+        haystack++;
+    }
+    
+    return NULL; // Needle not found
+}

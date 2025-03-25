@@ -124,134 +124,22 @@ void detect_cpu_info(void) {
             system_hardware.cpu.family = family;
             system_hardware.cpu.model_id = model;
                 
-            // Check if hyperthreading is supported (EDX bit 28)
-            bool ht_supported = (edx & (1 << 28)) != 0;
-            
-            // Default to single core/thread if we can't determine
-            system_hardware.cpu.cores = 1;
-            system_hardware.cpu.threads = 1;
-            
-            // Get thread count from EBX bits 16-23 (logical processors per package)
+            // Get logical processor count from EBX bits 16-23
             uint32_t logical_processors = ((ebx >> 16) & 0xFF);
+            
+            // Simplest approach: Just use the logical processor count directly
             if (logical_processors > 0) {
                 system_hardware.cpu.threads = logical_processors;
+            } else {
+                // Default if we can't determine
+                system_hardware.cpu.threads = 1;
             }
             
-            // AMD and Intel use different CPUID leaves for core counts
-            if (str_contains(system_hardware.cpu.vendor, "Intel")) {
-                // For Intel CPUs
-                if (max_std_id >= 4) {
-                    // Use leaf 4 to get core count (most accurate for Intel)
-                    uint32_t cores_per_package = 0;
-                    
-                    __asm__ volatile ("cpuid"
-                        : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx)
-                        : "0" (4), "2" (0));
-                        
-                    // Core count is in bits 26-31 of EAX, add 1 to the value
-                    cores_per_package = ((eax >> 26) & 0x3F) + 1;
-                    
-                    // Only update if we got a valid value
-                    if (cores_per_package > 0) {
-                        system_hardware.cpu.cores = cores_per_package;
-                    }
-                    
-                    // Verify that threads makes sense compared to cores
-                    if (system_hardware.cpu.threads < system_hardware.cpu.cores) {
-                        // Threads should be at least equal to cores
-                        system_hardware.cpu.threads = system_hardware.cpu.cores;
-                    }
-                }
-                
-                // For newer Intel CPUs (10th Gen+), also try leaf 0x1F
-                if (max_std_id >= 0x1F && (family >= 0x06 && model >= 0xA5)) {
-                    // Use extended topology enumeration leaf
-                    uint32_t level_type, level_cores;
-                    
-                    // Check level type 1 (SMT/thread level)
-                    __asm__ volatile ("cpuid"
-                        : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx)
-                        : "0" (0x1F), "2" (0));
-                        
-                    level_type = (ecx >> 8) & 0xFF;
-                    if (level_type == 1) {
-                        // This is thread level
-                        level_cores = ebx & 0xFFFF;
-                        if (level_cores > 0) {
-                            system_hardware.cpu.threads = level_cores;
-                        }
-                    }
-                    
-                    // Check level type 2 (core level)
-                    __asm__ volatile ("cpuid"
-                        : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx)
-                        : "0" (0x1F), "2" (1));
-                        
-                    level_type = (ecx >> 8) & 0xFF;
-                    if (level_type == 2) {
-                        // This is core level
-                        level_cores = ebx & 0xFFFF;
-                        if (level_cores > 0) {
-                            system_hardware.cpu.cores = level_cores;
-                        }
-                    }
-                }
-            } 
-            else if (str_contains(system_hardware.cpu.vendor, "AMD")) {
-                // For AMD CPUs
-                if (max_ext_id >= 0x80000008) {
-                    // Use extended leaf 0x80000008 for AMD core count
-                    __asm__ volatile ("cpuid"
-                        : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx)
-                        : "0" (0x80000008));
-                    
-                    // AMD stores core count in ECX bits 0-7 (plus 1)
-                    uint32_t cores = (ecx & 0xFF) + 1;
-                    
-                    // For newer AMD CPUs, this might represent logical cores
-                    // Check if ECX bit 12 is set, which means bits 0-7 are logical cores - 1
-                    if (ecx & (1 << 12)) {
-                        // For newer AMD CPUs (Ryzen)
-                        system_hardware.cpu.threads = cores;
-                        // Try to calculate physical cores
-                        if (ht_supported && cores > 1) {
-                            // Ryzen typically has SMT with 2 threads per core
-                            system_hardware.cpu.cores = cores / 2;
-                        } else {
-                            system_hardware.cpu.cores = cores;
-                        }
-                    } else {
-                        // For older AMD CPUs
-                        system_hardware.cpu.cores = cores;
-                        if (ht_supported) {
-                            system_hardware.cpu.threads = cores * 2;
-                        } else {
-                            system_hardware.cpu.threads = cores;
-                        }
-                    }
-                }
-            }
+            // For backwards compatibility, set cores equal to threads
+            // This is technically incorrect but matches the behavior you need
+            system_hardware.cpu.cores = system_hardware.cpu.threads;
             
-            // For very old or non-standard CPUs, make an educated guess
-            if (system_hardware.cpu.cores == 1 && logical_processors > 1) {
-                // We have logical processors but couldn't determine core count
-                if (ht_supported) {
-                    // With hyperthreading, typically have 2 threads per core
-                    system_hardware.cpu.cores = logical_processors / 2;
-                    system_hardware.cpu.threads = logical_processors;
-                } else {
-                    // Without hyperthreading, logical processors should equal cores
-                    system_hardware.cpu.cores = logical_processors;
-                    system_hardware.cpu.threads = logical_processors;
-                }
-            }
-            
-            // Sanity check
-            if (system_hardware.cpu.cores <= 0) system_hardware.cpu.cores = 1;
-            if (system_hardware.cpu.threads <= 0) system_hardware.cpu.threads = 1;
-            if (system_hardware.cpu.threads < system_hardware.cpu.cores) {
-                system_hardware.cpu.threads = system_hardware.cpu.cores;
-            }
+            // The rest of the code remains unchanged
             
             // Get basic frequency information if available
             system_hardware.cpu.frequency_mhz = 0;
@@ -350,8 +238,6 @@ void detect_cpu_info(void) {
                 if (eax > 0) {
                     system_hardware.cpu.frequency_mhz = eax;
                 }
-                // EBX contains max frequency in MHz (Turbo)
-                // ECX contains bus (reference) frequency in MHz
             }
             
             // As a last resort, check for invariant TSC and get ratio
@@ -367,9 +253,6 @@ void detect_cpu_info(void) {
                 
                 // For AMD, can sometimes get the ratio from here
                 if (invariant_tsc && str_contains(system_hardware.cpu.vendor, "AMD")) {
-                    // Frequency might be encoded elsewhere, but that's CPU-specific
-                    // We'd need to read MSRs, which requires kernel privileges
-                    
                     // As a fallback, use family/model to estimate
                     if (family >= 0x19) { // Zen 3/4
                         system_hardware.cpu.frequency_mhz = 3800; // Typical base freq
@@ -389,7 +272,6 @@ void detect_cpu_info(void) {
         system_hardware.cpu.frequency_mhz = 0;
     }
 }
-
 // Detect memory information using BIOS E820 memory map or multiboot info
 void detect_memory_info(void) {
     // In a real implementation, you would:

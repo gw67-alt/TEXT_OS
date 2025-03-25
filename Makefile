@@ -13,10 +13,12 @@ $(MAIN):
 
 	gcc -c pci.c -ffreestanding -m32 -o pci.o -std=gnu99
 
+	gcc -c stdio.c -ffreestanding -m32 -o stdio.o -std=gnu99
+
 
 	gcc -c io.c -ffreestanding -m32 -o io.o -std=gnu99
 
-	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o hardware_specs.o pci.o io.o -lgcc
+	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o hardware_specs.o pci.o io.o stdio.o -lgcc
 	grub-mkrescue -o '$@' '$(ISODIR)'
 
 clean:

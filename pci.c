@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdarg.h>
-
+#include "stdio.h"
 #include "driver.h"
 
 
@@ -278,7 +278,7 @@ void enumerate_pci_devices() {
     char buffer[100];
     int device_count = 0;
     
-    terminal_writestring("==== PCI Device Enumeration ====\n\n");
+    printf("==== PCI Device Enumeration ====\n");
     
     // Scan all buses, devices, and functions
     for (uint16_t bus = 0; bus < 256; bus++) {
@@ -290,7 +290,7 @@ void enumerate_pci_devices() {
                     if (function == 0) break;
                     else continue;
                 }
-                
+                ++device_count;
                 // Device found - get details
                 uint16_t vendor_id = pci_config_read16(bus, device, function, PCI_VENDOR_ID);
                 uint16_t device_id = pci_config_read16(bus, device, function, PCI_DEVICE_ID);
@@ -299,56 +299,48 @@ void enumerate_pci_devices() {
                 uint8_t prog_if = pci_config_read8(bus, device, function, PCI_PROG_IF);
                 uint8_t revision = pci_config_read8(bus, device, function, PCI_REVISION_ID);
                 uint8_t header_type = pci_config_read8(bus, device, function, PCI_HEADER_TYPE) & 0x7F;
-                
+                /*
                 // Print device information
-                sprintf(buffer, "Device %d: %02X:%02X.%d\n", 
-                        ++device_count, bus, device, function);
-                terminal_writestring(buffer);
-                
-                sprintf(buffer, "  Vendor: %s (0x%04X)\n", 
+                printf("Device %d: %02X:%02X.%d", 
+                        device_count, bus, device, function);
+				printf("\n");
+                printf("  Vendor: %s (0x%04X)", 
                         pci_get_vendor_name(vendor_id), vendor_id);
-                terminal_writestring(buffer);
+                printf("\n");
                 
-                sprintf(buffer, "  Device ID: 0x%04X (Rev: 0x%02X)\n", 
+                printf("  Device ID: 0x%04X (Rev: 0x%02X)", 
                         device_id, revision);
-                terminal_writestring(buffer);
+                printf("\n");
                 
-                sprintf(buffer, "  Class: %s (0x%02X:0x%02X)\n", 
+                printf("  Class: %s (0x%02X:0x%02X)", 
                         pci_get_device_type_name(class_code, subclass), 
                         class_code, subclass);
-                terminal_writestring(buffer);
+                printf("\n");
                 
-                sprintf(buffer, "  Prog IF: 0x%02X, Header Type: 0x%02X\n", 
+                printf("  Prog IF: 0x%02X, Header Type: 0x%02X", 
                         prog_if, header_type);
-                terminal_writestring(buffer);
-                
-                // For AHCI controllers, show additional information
-                if (is_ahci_controller(bus, device, function)) {
-                    uint32_t bar5 = pci_config_read32(bus, device, function, PCI_BAR5);
-                    sprintf(buffer, "  ** AHCI Controller at Base Address: 0x%08X **\n", 
-                            bar5 & 0xFFFFFFF0);
-                    terminal_writestring(buffer);
-                }
-                
-                terminal_writestring("\n");
+                */
+
+
+				
             }
         }
     }
     
     if (device_count == 0) {
-        terminal_writestring("No PCI devices found.\n");
+        printf("No PCI devices found.\n");
     } else {
-        sprintf(buffer, "Total PCI devices found: %d\n", device_count);
-        terminal_writestring(buffer);
+        printf("Total PCI devices found: %d", device_count);
+		printf("\n");
     }
     
-    terminal_writestring("==== End of PCI Enumeration ====\n\n");
+    printf("==== End of PCI Enumeration ====\n\n");
 }
 
 // Find an AHCI controller and return its base address
 uint32_t find_ahci_controller() {
     char buffer[100];
-    terminal_writestring("Scanning PCI bus for AHCI controller...\n");
+    printf("Scanning PCI bus for AHCI controller...\n");
     
     // Scan all buses, devices, and functions
     for (uint16_t bus = 0; bus < 256; bus++) {
@@ -363,16 +355,16 @@ uint32_t find_ahci_controller() {
                 
                 // Check if this is an AHCI controller
                 if (is_ahci_controller(bus, device, function)) {
-                    sprintf(buffer, "Found AHCI controller at PCI %d:%d.%d\n", 
+                    printf("Found AHCI controller at PCI %d:%d.%d\n", 
                             bus, device, function);
-                    terminal_writestring(buffer);
+                    
                     
                     // Get vendor and device IDs for debugging
                     uint16_t vendor = pci_config_read16(bus, device, function, PCI_VENDOR_ID);
                     uint16_t dev_id = pci_config_read16(bus, device, function, PCI_DEVICE_ID);
-                    sprintf(buffer, "Vendor: %s (0x%X), Device: 0x%X\n", 
+                    printf("Vendor: %s (0x%X), Device: 0x%X\n", 
                             pci_get_vendor_name(vendor), vendor, dev_id);
-                    terminal_writestring(buffer);
+                    
                     
                     // Enable the controller
                     enable_ahci_controller(bus, device, function);
@@ -383,8 +375,8 @@ uint32_t find_ahci_controller() {
                     // Extract the base address (mask off the lower bits)
                     uint32_t abar = bar5 & 0xFFFFFFF0;
                     
-                    sprintf(buffer, "AHCI Base Address: 0x%X\n", abar);
-                    terminal_writestring(buffer);
+                    printf("AHCI Base Address: 0x%X\n", abar);
+                    
                     
                     return abar;
                 }
@@ -392,6 +384,6 @@ uint32_t find_ahci_controller() {
         }
     }
     
-    terminal_writestring("No AHCI controller found on PCI bus.\n");
+    printf("No AHCI controller found on PCI bus.\n");
     return 0;
 }

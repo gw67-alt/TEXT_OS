@@ -2,7 +2,7 @@
 #include <stdbool.h>
 #include "kernel.h"
 #include "hardware_specs.h"
-#include "io.h"
+
 // Hardware detection and specification structure
 hardware_info_t system_hardware;
 
@@ -12,7 +12,7 @@ static char brand_buffer[49];
 
 // Initialize and detect hardware specifications
 void hardware_specs_initialize(void) {
-    terminal_writestring("Detecting hardware specifications...\n");
+    printf("Detecting hardware specifications...\n");
     
     // CPU information
     detect_cpu_info();
@@ -360,84 +360,84 @@ bool str_contains(const char* str, const char* substr) {
 
 // Display detected hardware information
 void display_hardware_info(void) {
-    terminal_writestring("\n===== HARDWARE SPECIFICATIONS =====\n");
+    printf("\n===== HARDWARE SPECIFICATIONS =====\n");
     
     // CPU info
-    terminal_writestring("CPU: ");
+    printf("CPU: ");
     if (system_hardware.cpu.model != NULL) {
-        terminal_writestring(system_hardware.cpu.model);
+        printf(system_hardware.cpu.model);
     } else {
-        terminal_writestring("Unknown");
+        printf("Unknown");
     }
-    terminal_writestring("\n");
+    printf("\n");
     
-    terminal_writestring("Vendor: ");
+    printf("Vendor: ");
     if (system_hardware.cpu.vendor != NULL) {
-        terminal_writestring(system_hardware.cpu.vendor);
+        printf(system_hardware.cpu.vendor);
     } else {
-        terminal_writestring("Unknown");
+        printf("Unknown");
     }
-    terminal_writestring("\n");
+    printf("\n");
     
-    terminal_writestring("Family/Model: ");
+    printf("Family/Model: ");
     char buffer[32];
     int_to_string(system_hardware.cpu.family, buffer);
-    terminal_writestring(buffer);
-    terminal_writestring("h/");
+    printf(buffer);
+    printf("h/");
     int_to_string(system_hardware.cpu.model_id, buffer);
-    terminal_writestring(buffer);
-    terminal_writestring("h\n");
+    printf(buffer);
+    printf("h\n");
     
-    terminal_writestring("Cores/Threads: ");
+    printf("Cores/Threads: ");
     int_to_string(system_hardware.cpu.cores, buffer);
-    terminal_writestring(buffer);
-    terminal_writestring("/");
+    printf(buffer);
+    printf("/");
     int_to_string(system_hardware.cpu.threads, buffer);
-    terminal_writestring(buffer);
-    terminal_writestring("\n");
+    printf(buffer);
+    printf("\n");
     
     if (system_hardware.cpu.frequency_mhz > 0) {
-        terminal_writestring("Frequency: ");
+        printf("Frequency: ");
         int_to_string(system_hardware.cpu.frequency_mhz, buffer);
-        terminal_writestring(buffer);
-        terminal_writestring(" MHz\n");
+        printf(buffer);
+        printf(" MHz\n");
     }
     
     // Memory info
-    terminal_writestring("\nMemory: ");
+    printf("\nMemory: ");
     int_to_string(system_hardware.memory.total_mb, buffer);
-    terminal_writestring(buffer);
-    terminal_writestring(" MB ");
-    terminal_writestring(system_hardware.memory.type);
+    printf(buffer);
+    printf(" MB ");
+    printf(system_hardware.memory.type);
     
     if (system_hardware.memory.speed_mhz > 0) {
-        terminal_writestring(" @ ");
+        printf(" @ ");
         int_to_string(system_hardware.memory.speed_mhz, buffer);
-        terminal_writestring(buffer);
-        terminal_writestring(" MHz");
+        printf(buffer);
+        printf(" MHz");
     }
     
-    terminal_writestring(" (");
+    printf(" (");
     int_to_string(system_hardware.memory.channels, buffer);
-    terminal_writestring(buffer);
-    terminal_writestring(" channels)\n");
+    printf(buffer);
+    printf(" channels)\n");
     
     // Motherboard info
-    terminal_writestring("\nMotherboard: ");
-    terminal_writestring(system_hardware.motherboard.manufacturer);
+    printf("\nMotherboard: ");
+    printf(system_hardware.motherboard.manufacturer);
     
     if (system_hardware.motherboard.model != NULL && 
         system_hardware.motherboard.model[0] != '\0' &&
         !str_equals(system_hardware.motherboard.model, "Unknown")) {
-        terminal_writestring(" ");
-        terminal_writestring(system_hardware.motherboard.model);
+        printf(" ");
+        printf(system_hardware.motherboard.model);
     }
     
-    terminal_writestring("\nChipset: ");
-    terminal_writestring(system_hardware.motherboard.chipset);
-    terminal_writestring("\n");
+    printf("\nChipset: ");
+    printf(system_hardware.motherboard.chipset);
+    printf("\n");
     
-    terminal_writestring("\n==================================\n");
+    printf("\n==================================\n");
 }
 
 // String equality helper function

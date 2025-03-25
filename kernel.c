@@ -1,10 +1,9 @@
-#if !defined(__cplusplus)
 #include <stdbool.h> /* C doesn't have booleans by default. */
-#endif
 #include <stddef.h>
 #include <stdint.h>
 #include "hardware_specs.h"
 #include "io.h"
+#include "stdio.h"
 
 /* Check if the compiler thinks we are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -73,7 +72,8 @@ void ultoa(unsigned long value, char* str, int base);
 int toupper(int c);
 void int_to_string(int num, char* str);
 void reverse_string(char* str, int start, int end);
-
+uint8_t inb(uint16_t port);
+void outb(uint16_t port, uint8_t val);
 void update_hardware_cursor(int x, int y);
 void enable_hardware_cursor(uint8_t cursor_start, uint8_t cursor_end);
 void disable_hardware_cursor();
@@ -82,7 +82,7 @@ void terminal_initialize();
 void terminal_setcolor(uint8_t color);
 void terminal_putentryat(char c, uint8_t color, size_t x, size_t y);
 void terminal_putchar(char c);
-void terminal_writestring(const char* data);
+void prinf(const char* data);
 void update_cursor_state();
 void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran);
 void init_gdt();
@@ -342,8 +342,6 @@ uint16_t* terminal_buffer;
 bool cursor_visible = true;  // Cursor visibility state
 uint32_t cursor_blink_counter = 0;  // Counter for cursor blinking
 
-
-
 // Function to update the clock display in the top-right corner
 void update_clock_display() {
     const size_t clock_x = VGA_WIDTH - 8;  // Position for HH:MM:SS
@@ -458,6 +456,31 @@ void terminal_putentryat(char c, uint8_t color, size_t x, size_t y) {
     terminal_buffer[index] = make_vgaentry(c, color);
 }
 
+// Add this function before terminal_putchar
+void terminal_scroll() {
+    // Move all rows up by one (effectively deleting the top row)
+    for (size_t y = 0; y < VGA_HEIGHT - 1; y++) {
+        for (size_t x = 0; x < VGA_WIDTH; x++) {
+            const size_t dst_index = y * VGA_WIDTH + x;
+            const size_t src_index = (y + 1) * VGA_WIDTH + x;
+            terminal_buffer[dst_index] = terminal_buffer[src_index];
+        }
+    }
+    
+    // Clear the last row
+    for (size_t x = 0; x < VGA_WIDTH; x++) {
+        const size_t index = (VGA_HEIGHT - 1) * VGA_WIDTH + x;
+        terminal_buffer[index] = make_vgaentry(' ', terminal_color);
+    }
+    
+    // Adjust the cursor to the beginning of the last row
+    terminal_row = VGA_HEIGHT - 1;
+    terminal_column = 0;
+    
+    // Make sure to update the clock display after scrolling
+    update_clock_display();
+}
+
 // Now modify the terminal_putchar function to use scrolling
 void terminal_putchar(char c) {
     if (c == '\n') {
@@ -496,7 +519,7 @@ void terminal_putchar(char c) {
     // Update the hardware cursor position
     update_hardware_cursor(terminal_column, terminal_row);
 }
-void terminal_writestring(const char* data) {
+void prinf(const char* data) {
     size_t datalen = strlen(data);
     for (size_t i = 0; i < datalen; i++)
         terminal_putchar(data[i]);
@@ -797,56 +820,8 @@ void cmd_clear();
 void cmd_hello();
 void cmd_time(); // New command for displaying time info
 void process_command();
-// Add these global variables
-bool pagination_enabled = true;  // Control to toggle pagination on/off
-bool pagination_waiting = false; // Flag to indicate waiting for Enter
 
-// Add this function to wait for Enter key press
-void wait_for_enter() {
-    // Save current position and color
-    size_t saved_row = terminal_row;
-    size_t saved_column = terminal_column;
-    uint8_t saved_color = terminal_color;
-    
-    // Set special color for pagination message
-    terminal_setcolor(make_color(VGA_COLOR_WHITE, VGA_COLOR_BLUE));
-    
-    // Print message on the last line
-    for (size_t x = 0; x < VGA_WIDTH; x++) {
-        terminal_putentryat(' ', terminal_color, x, VGA_HEIGHT - 1);
-    }
-    
-    const char* msg = "-- Press Enter to continue --";
-    size_t msg_len = strlen(msg);
-    size_t msg_start = (VGA_WIDTH - msg_len) / 2;
-    
-    for (size_t i = 0; i < msg_len; i++) {
-        terminal_putentryat(msg[i], terminal_color, msg_start + i, VGA_HEIGHT - 1);
-    }
-    
-    // Update cursor to message end
-    update_hardware_cursor(msg_start + msg_len, VGA_HEIGHT - 1);
-    
-    // Set waiting flag
-    pagination_waiting = true;
-    
-    // Wait for Enter key press
-    while (pagination_waiting) {
-        __asm__ volatile ("hlt");
-    }
-    
-    // Clear the pagination message line
-    for (size_t x = 0; x < VGA_WIDTH; x++) {
-        terminal_putentryat(' ', saved_color, x, VGA_HEIGHT - 1);
-    }
-    
-    // Restore color and position
-    terminal_setcolor(saved_color);
-    terminal_row = saved_row;
-    terminal_column = saved_column;
-    update_hardware_cursor(terminal_column, terminal_row);
-}
-// Modify keyboard handler to handle pagination
+/* Keyboard handler with integrated command processing */
 void keyboard_handler() {
     /* Read scancode from keyboard data port */
     uint8_t scancode = inb(0x60);
@@ -868,18 +843,7 @@ void keyboard_handler() {
         return;
     }
 
-    /* Check if waiting for Enter during pagination */
-    if (pagination_waiting) {
-        char key = scancode_to_ascii[scancode];
-        if (key == '\n') {
-            pagination_waiting = false;
-        }
-        /* Send EOI to PIC */
-        outb(0x20, 0x20);
-        return;
-    }
-
-     /* Normal input handling */
+    /* Normal input handling */
     char key = scancode_to_ascii[scancode];
     if (key != 0) {
         if (key == '\n') {
@@ -892,7 +856,7 @@ void keyboard_handler() {
             
             // Reset for next command
             command_length = 0;
-            terminal_writestring("> ");
+            prinf("> ");
         } else if (key == '\b') {
             // Backspace - delete last character
             if (command_length > 0) {
@@ -911,54 +875,6 @@ void keyboard_handler() {
 
     /* Send EOI to PIC */
     outb(0x20, 0x20);
-	}
-// Modify terminal_scroll to implement pagination
-void terminal_scroll() {
-    // Check if pagination is enabled
-    if (pagination_enabled) {
-        wait_for_enter();
-        
-        // Directly clear the screen instead of scrolling
-        for (size_t y = 0; y < VGA_HEIGHT; y++) {
-            for (size_t x = 0; x < VGA_WIDTH; x++) {
-                const size_t index = y * VGA_WIDTH + x;
-                terminal_buffer[index] = make_vgaentry(' ', terminal_color);
-            }
-        }
-        
-        // Set cursor to top of screen
-        terminal_row = 0;
-        terminal_column = 0;
-        update_hardware_cursor(terminal_column, terminal_row);
-        
-        // Make sure to update the clock display
-        update_clock_display();
-        
-        // Return early - we've cleared the screen instead of scrolling
-        return;
-    }
-    
-    // If pagination is disabled, perform normal scrolling
-    for (size_t y = 0; y < VGA_HEIGHT - 1; y++) {
-        for (size_t x = 0; x < VGA_WIDTH; x++) {
-            const size_t dst_index = y * VGA_WIDTH + x;
-            const size_t src_index = (y + 1) * VGA_WIDTH + x;
-            terminal_buffer[dst_index] = terminal_buffer[src_index];
-        }
-    }
-    
-    // Clear the last row
-    for (size_t x = 0; x < VGA_WIDTH; x++) {
-        const size_t index = (VGA_HEIGHT - 1) * VGA_WIDTH + x;
-        terminal_buffer[index] = make_vgaentry(' ', terminal_color);
-    }
-    
-    // Adjust the cursor to the beginning of the last row
-    terminal_row = VGA_HEIGHT - 1;
-    terminal_column = 0;
-    
-    // Make sure to update the clock display after scrolling
-    update_clock_display();
 }
 
 /* Process the command in the buffer */
@@ -981,20 +897,19 @@ void process_command() {
     } else if (strcmp(command_buffer, "time")) {
         cmd_time();
     } else {
-        terminal_writestring("Unknown command: ");
-        terminal_writestring(command_buffer);
-        terminal_writestring("\n");
+        prinf("Unknown command: ");
+        prinf(command_buffer);
+        prinf("\n");
     }
 }
 
 /* Command implementations */
 void cmd_help() {
-    terminal_writestring("Available commands:\n");
-    terminal_writestring("  help  - Show this help message\n");
-    terminal_writestring("  clear - Clear the screen\n");
-    terminal_writestring("  hello - Display a greeting\n");
-    terminal_writestring("  time  - Display the current time details\n");
-    terminal_writestring("  lsdrive - List SATA drives\n");
+    prinf("Available commands:\n");
+    prinf("  help  - Show this help message\n");
+    prinf("  clear - Clear the screen\n");
+    prinf("  hello - Display a greeting\n");
+    prinf("  time  - Display the current time details\n");
 }
 
 void cmd_clear() {
@@ -1002,35 +917,35 @@ void cmd_clear() {
 }
 
 void cmd_hello() {
-    terminal_writestring("Hello, user!\n");
+    prinf("Hello, user!\n");
 }
 
 // New command to display detailed time information
 void cmd_time() {
     char time_str[32];
     
-    terminal_writestring("Current system time:\n");
+    prinf("Current system time:\n");
     
     // Format hours
-    terminal_writestring("  Hours:   ");
+    prinf("  Hours:   ");
     itoa(current_hours, time_str, 10);
-    terminal_writestring(time_str);
-    terminal_writestring("\n");
+    prinf(time_str);
+    prinf("\n");
     
     // Format minutes
-    terminal_writestring("  Minutes: ");
+    prinf("  Minutes: ");
     itoa(current_minutes, time_str, 10);
-    terminal_writestring(time_str);
-    terminal_writestring("\n");
+    prinf(time_str);
+    prinf("\n");
     
     // Format seconds
-    terminal_writestring("  Seconds: ");
+    prinf("  Seconds: ");
     itoa(current_seconds, time_str, 10);
-    terminal_writestring(time_str);
-    terminal_writestring("\n");
+    prinf(time_str);
+    prinf("\n");
     
     // Also display formatted time
-    terminal_writestring("Formatted time: ");
+    prinf("Formatted time: ");
     time_str[0] = (current_hours / 10) + '0';
     time_str[1] = (current_hours % 10) + '0';
     time_str[2] = ':';
@@ -1040,8 +955,8 @@ void cmd_time() {
     time_str[6] = (current_seconds / 10) + '0';
     time_str[7] = (current_seconds % 10) + '0';
     time_str[8] = '\0';
-    terminal_writestring(time_str);
-    terminal_writestring("\n");
+    prinf(time_str);
+    prinf("\n");
 }
 
 /* Modified kernel_main function */
@@ -1057,13 +972,12 @@ void kernel_main() {
     /* Initialize the real-time clock */
     init_rtc();
 	
-	/* Initialize SATA drives */
-    enumerate_pci_devices();
+    enumerate_pci_devices();	
 	
-    terminal_writestring("Initialization complete. Start typing commands...\n");
+    prinf("Initialization complete. Start typing commands...\n");
     
     /* Display initial prompt */
-    terminal_writestring("> ");
+    prinf("> ");
     
     /* Reset command buffer */
     command_length = 0;

@@ -454,39 +454,15 @@ void terminal_putentryat(char c, uint8_t color, size_t x, size_t y) {
     terminal_buffer[index] = make_vgaentry(c, color);
 }
 
-// Add this function before terminal_putchar
-void terminal_scroll() {
-    // Move all rows up by one (effectively deleting the top row)
-    for (size_t y = 0; y < VGA_HEIGHT - 1; y++) {
-        for (size_t x = 0; x < VGA_WIDTH; x++) {
-            const size_t dst_index = y * VGA_WIDTH + x;
-            const size_t src_index = (y + 1) * VGA_WIDTH + x;
-            terminal_buffer[dst_index] = terminal_buffer[src_index];
-        }
-    }
-    
-    // Clear the last row
-    for (size_t x = 0; x < VGA_WIDTH; x++) {
-        const size_t index = (VGA_HEIGHT - 1) * VGA_WIDTH + x;
-        terminal_buffer[index] = make_vgaentry(' ', terminal_color);
-    }
-    
-    // Adjust the cursor to the beginning of the last row
-    terminal_row = VGA_HEIGHT - 1;
-    terminal_column = 0;
-    
-    // Make sure to update the clock display after scrolling
-    update_clock_display();
-}
 
-// Now modify the terminal_putchar function to use scrolling
 void terminal_putchar(char c) {
     if (c == '\n') {
         // Handle newline character
         terminal_column = 0;
         if (++terminal_row == VGA_HEIGHT) {
-            // Instead of wrapping to 0, scroll the screen
-            terminal_scroll();
+            // Instead of automatically scrolling, check if we need paging
+            terminal_wait_key();
+            clear_screen();
         }
     } else if (c == '\b') {
         // Handle backspace character
@@ -508,10 +484,18 @@ void terminal_putchar(char c) {
         if (++terminal_column == VGA_WIDTH) {
             terminal_column = 0;
             if (++terminal_row == VGA_HEIGHT) {
-                // Instead of wrapping to 0, scroll the screen
-                terminal_scroll();
+                // Instead of automatically scrolling, check if we need paging
+                terminal_wait_key();
+                clear_screen();
             }
         }
+    }
+
+    // Check if we're near the bottom of the screen and need paging
+    // (This gives some buffer before actually hitting the edge)
+    if (terminal_row >= VGA_HEIGHT - 2) {
+        terminal_wait_key();
+        clear_screen();
     }
 
     // Update the hardware cursor position
@@ -532,6 +516,66 @@ void update_cursor_state() {
 
         update_hardware_cursor(terminal_column, terminal_row);
     }
+}
+
+
+
+// Flag to indicate when we're waiting for a keypress to continue
+bool waiting_for_keypress = false;
+
+// Function to display the "press any key" prompt and wait for a keypress
+void terminal_wait_key() {
+    // Save current position and color
+    size_t saved_row = terminal_row;
+    size_t saved_column = terminal_column;
+    uint8_t saved_color = terminal_color;
+    
+    // Move to last line and display prompt with highlighted text
+    terminal_row = VGA_HEIGHT - 1;
+    terminal_column = 0;
+    terminal_setcolor(make_color(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY));
+    
+    // Clear the line
+    for (size_t x = 0; x < VGA_WIDTH; x++) {
+        terminal_putentryat(' ', terminal_color, x, terminal_row);
+    }
+    
+    // Write the prompt
+    const char* prompt = "-- Press any key to continue --";
+    size_t prompt_len = strlen(prompt);
+    size_t prompt_pos = (VGA_WIDTH - prompt_len) / 2; // Center the prompt
+    
+    for (size_t i = 0; i < prompt_len; i++) {
+        terminal_putentryat(prompt[i], terminal_color, prompt_pos + i, terminal_row);
+    }
+    
+    // Update hardware cursor
+    update_hardware_cursor(terminal_column, terminal_row);
+    
+    // Set flag to indicate we're waiting for a keypress
+    waiting_for_keypress = true;
+    
+    // Wait for a keypress in the main loop (handled by keyboard interrupt)
+    while (waiting_for_keypress) {
+        __asm__ volatile ("hlt");
+    }
+    
+    // Once key is pressed, restore the line to normal
+    terminal_setcolor(saved_color);
+    for (size_t x = 0; x < VGA_WIDTH; x++) {
+        terminal_putentryat(' ', terminal_color, x, terminal_row);
+    }
+    
+    // Restore position and color
+    terminal_row = saved_row;
+    terminal_column = saved_column;
+    terminal_setcolor(saved_color);
+    
+    // Update cursor position
+    update_hardware_cursor(terminal_column, terminal_row);
+    
+    // Make sure the clock display is updated
+    update_clock_display();
 }
 
 /* Extended scancode table for function keys */
@@ -814,6 +858,20 @@ void cmd_hello();
 void cmd_time(); // New command for displaying time info
 void process_command();
 
+
+// Function to check if screen needs paging
+void check_screen_paging() {
+    // If we're close to the bottom of the screen (leaving room for the prompt)
+    if (terminal_row >= VGA_HEIGHT - 2) {
+        terminal_wait_key();
+        
+        // After key press, clear the screen or scroll as needed
+        // Here we'll clear for simplicity, but you could modify to keep some history
+        clear_screen();
+    }
+}
+
+/* Keyboard handler with integrated command processing */
 /* Keyboard handler with integrated command processing */
 void keyboard_handler() {
     /* Read scancode from keyboard data port */
@@ -831,6 +889,14 @@ void keyboard_handler() {
     if (scancode & 0x80) {
         /* Reset extended key flag if it was set */
         extended_key = false;
+        /* Send EOI to PIC */
+        outb(0x20, 0x20);
+        return;
+    }
+
+    /* Check if we're waiting for a keypress to continue */
+    if (waiting_for_keypress) {
+        waiting_for_keypress = false;
         /* Send EOI to PIC */
         outb(0x20, 0x20);
         return;

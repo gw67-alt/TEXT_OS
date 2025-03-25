@@ -887,8 +887,6 @@ void process_command() {
         cmd_clear();
     } else if (strcmp(command_buffer, "hello")) {
         cmd_hello();
-    } else if (strcmp(command_buffer, "time")) {
-        cmd_time();
     } else {
         printf("Unknown command: ");
         printf(command_buffer);
@@ -902,7 +900,6 @@ void cmd_help() {
     printf("  help  - Show this help message\n");
     printf("  clear - Clear the screen\n");
     printf("  hello - Display a greeting\n");
-    printf("  time  - Display the current time details\n");
 }
 
 void cmd_clear() {
@@ -911,45 +908,6 @@ void cmd_clear() {
 
 void cmd_hello() {
     printf("Hello, user!\n");
-}
-
-// New command to display detailed time information
-void cmd_time() {
-    char time_str[32];
-    
-    printf("Current system time:\n");
-    
-    // Format hours
-    printf("  Hours:   ");
-    itoa(current_hours, time_str, 10);
-    printf(time_str);
-    printf("\n");
-    
-    // Format minutes
-    printf("  Minutes: ");
-    itoa(current_minutes, time_str, 10);
-    printf(time_str);
-    printf("\n");
-    
-    // Format seconds
-    printf("  Seconds: ");
-    itoa(current_seconds, time_str, 10);
-    printf(time_str);
-    printf("\n");
-    
-    // Also display formatted time
-    printf("Formatted time: ");
-    time_str[0] = (current_hours / 10) + '0';
-    time_str[1] = (current_hours % 10) + '0';
-    time_str[2] = ':';
-    time_str[3] = (current_minutes / 10) + '0';
-    time_str[4] = (current_minutes % 10) + '0';
-    time_str[5] = ':';
-    time_str[6] = (current_seconds / 10) + '0';
-    time_str[7] = (current_seconds % 10) + '0';
-    time_str[8] = '\0';
-    printf(time_str);
-    printf("\n");
 }
 
 /* Modified kernel_main function */

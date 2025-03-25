@@ -925,6 +925,9 @@ void kernel_main() {
 	
     enumerate_pci_devices();	
 
+
+
+	ahci_demo();
 	printf("Initialization complete. Start typing commands...\n");
 
     /* Display initial prompt */

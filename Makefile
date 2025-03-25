@@ -16,10 +16,13 @@ $(MAIN):
 	gcc -c stdio.c -ffreestanding -m32 -o stdio.o -std=gnu99
 
 
+	gcc -c AHCI.c -ffreestanding -m32 -o AHCI.o -std=gnu99
+
+
 
 	gcc -c io.c -ffreestanding -m32 -o io.o -std=gnu99
 
-	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o hardware_specs.o pci.o io.o stdio.o -lgcc -lc
+	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o AHCI.o hardware_specs.o pci.o io.o stdio.o -lgcc -lc
 	grub-mkrescue -o '$@' '$(ISODIR)'
 
 clean:

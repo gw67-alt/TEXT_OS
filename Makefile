@@ -25,4 +25,3 @@ $(MAIN):
 
 clean:
 	rm -f *.o '$(MULTIBOOT)' '$(MAIN)'
-

@@ -895,6 +895,8 @@ void process_command() {
         cmd_hello();
     } else if (strcmp(command_buffer, "time")) {
         cmd_time();
+    } else if (strcmp(command_buffer, "ahci_disk_init")) {
+        ahci_disk_init();
     } else {
         prinf("Unknown command: ");
         prinf(command_buffer);
@@ -909,6 +911,7 @@ void cmd_help() {
     prinf("  clear - Clear the screen\n");
     prinf("  hello - Display a greeting\n");
     prinf("  time  - Display the current time details\n");
+    prinf("ahci_disk_init - ahci disk init\n");
 }
 
 void cmd_clear() {
@@ -972,7 +975,6 @@ void kernel_main() {
     init_rtc();
 	
     enumerate_pci_devices();	
-    ahci_disk_init();
     prinf("Initialization complete. Start typing commands...\n");
 
     /* Display initial prompt */

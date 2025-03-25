@@ -1429,7 +1429,8 @@ bool ahci_disk_init_debug() {
 // Add this function to dump AHCI controller and port status
 void ahci_dump_status() {
     if (ahci_base_address == 0) {
-        printf("AHCI not initialized\n");
+        printf("AHCI not initialized");
+        printf("\n");
         return;
     }
     

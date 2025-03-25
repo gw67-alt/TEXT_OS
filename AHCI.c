@@ -12,6 +12,20 @@
 // Memory base address for AHCI (used in the example implementation)
 #define AHCI_BASE 0x400000  // 4M
 
+
+uint32_t pci_read_config_dword(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset) {
+    uint32_t address = 0x80000000 | (bus << 16) | (device << 11) | (function << 8) | (offset & 0xFC);
+    outl(0xCF8, address);
+    return inl(0xCFC);
+}
+
+// For memory mapping in a custom OS
+void* map_physical_memory(uint64_t phys_addr, size_t size) {
+    // This would depend on your memory management system
+    // For a simple environment without paging, you might just cast:
+    return (void*)phys_addr;
+}
+
 /**
  * Start command engine on the port
  */
@@ -576,7 +590,7 @@ void ahci_demo(void) {
     printf("AHCI Demo Starting\n");
     
     // Variables for our demo
-    HBA_MEM* abar = NULL;
+
     uint32_t ports_implemented = 0;
     
     // In a real kernel, we would:
@@ -586,10 +600,17 @@ void ahci_demo(void) {
     
     printf("Searching for AHCI controller via PCI...\n");
     
-    // For demo purposes, assume we found the controller
-    // and mapped its ABAR (this would be a physical memory mapping in a real kernel)
-    // This would be the actual mapped address in a real implementation
-    abar = (HBA_MEM*)0xFEDC0000;  // Example address - in a real kernel this would be mapped properly
+    uint32_t bus, device, function;
+	// Code to scan PCI bus and find the SATA controller
+	// For AMD B650 chipset, it's typically at a specific bus/device/function
+
+	
+    // Once found, read BAR5 which contains the ABAR
+	uint32_t bar5_lower = pci_read_config_dword(bus, device, function, 0x24);
+	uint32_t bar5_upper = pci_read_config_dword(bus, device, function, 0x28);
+	HBA_MEM* abar = ((uint64_t)bar5_upper << 32) | (bar5_lower & ~0xF); // Clear the lower 4 bits which are attributes
+	// Now you can map this physical address to a virtual address
+	HBA_MEM* hba = map_physical_memory(abar, sizeof(HBA_MEM));
     
     // Check if we have a valid ABAR pointer
     if (!abar) {
@@ -598,10 +619,8 @@ void ahci_demo(void) {
     }
     
     // Print controller version
-    printf("AHCI controller version: %d.%d\n", 
-           (abar->version >> 16) & 0xFFFF,
-           abar->version & 0xFFFF);
-    
+    printf("AHCI controller version: %d", (abar->version >> 16) & 0xFFFF);
+	printf(".%d\n", abar->version & 0xFFFF);
     // Get implemented ports bitmap
     ports_implemented = abar->portsImplemented;
     printf("Ports implemented bitmap: 0x%x\n", ports_implemented);
@@ -624,7 +643,6 @@ void ahci_demo(void) {
             // Check port signature to determine device type
             uint32_t signature = port->signature;
             const char* device_type = "Unknown";
-            
             if (signature == SATA) {
                 device_type = "SATA Drive";
             } else if (signature == SATAPI) {
@@ -635,7 +653,10 @@ void ahci_demo(void) {
                 device_type = "Enclosure Management Bridge";
             }
             
-            //printf("Port %d - Status: %08X, Signature: %08X, Type: %s\n", i, port->sataStatus, signature, device_type);
+            printf("Port %d", i);
+			printf(" - Status: %x" , port->sataStatus);
+			printf(" Signature: %x",signature);
+			printf(" Type: %s\n",device_type);
             
             // Check if device is present and active
             uint8_t ipm = (port->sataStatus >> 8) & 0x0F;

@@ -81,7 +81,6 @@ void terminal_initialize();
 void terminal_setcolor(uint8_t color);
 void terminal_putentryat(char c, uint8_t color, size_t x, size_t y);
 void terminal_putchar(char c);
-void prinf(const char* data);
 void update_cursor_state();
 void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran);
 void init_gdt();
@@ -518,11 +517,6 @@ void terminal_putchar(char c) {
     // Update the hardware cursor position
     update_hardware_cursor(terminal_column, terminal_row);
 }
-void prinf(const char* data) {
-    size_t datalen = strlen(data);
-    for (size_t i = 0; i < datalen; i++)
-        terminal_putchar(data[i]);
-}
 
 void update_cursor_state() {
     cursor_blink_counter++;
@@ -855,7 +849,7 @@ void keyboard_handler() {
             
             // Reset for next command
             command_length = 0;
-            prinf("> ");
+            printf("> ");
         } else if (key == '\b') {
             // Backspace - delete last character
             if (command_length > 0) {
@@ -895,23 +889,23 @@ void process_command() {
         cmd_hello();
     } else if (strcmp(command_buffer, "time")) {
         cmd_time();
-    } else if (strcmp(command_buffer, "ahci_disk_init")) {
+    } else if (strcmp(command_buffer, "ahci disk init")) {
         ahci_disk_init();
     } else {
-        prinf("Unknown command: ");
-        prinf(command_buffer);
-        prinf("\n");
+        printf("Unknown command: ");
+        printf(command_buffer);
+        printf("\n");
     }
 }
 
 /* Command implementations */
 void cmd_help() {
-    prinf("Available commands:\n");
-    prinf("  help  - Show this help message\n");
-    prinf("  clear - Clear the screen\n");
-    prinf("  hello - Display a greeting\n");
-    prinf("  time  - Display the current time details\n");
-    prinf("ahci_disk_init - ahci disk init\n");
+    printf("Available commands:\n");
+    printf("  help  - Show this help message\n");
+    printf("  clear - Clear the screen\n");
+    printf("  hello - Display a greeting\n");
+    printf("  time  - Display the current time details\n");
+    printf("  ahci disk init - ahci disk init\n");
 }
 
 void cmd_clear() {
@@ -919,35 +913,35 @@ void cmd_clear() {
 }
 
 void cmd_hello() {
-    prinf("Hello, user!\n");
+    printf("Hello, user!\n");
 }
 
 // New command to display detailed time information
 void cmd_time() {
     char time_str[32];
     
-    prinf("Current system time:\n");
+    printf("Current system time:\n");
     
     // Format hours
-    prinf("  Hours:   ");
+    printf("  Hours:   ");
     itoa(current_hours, time_str, 10);
-    prinf(time_str);
-    prinf("\n");
+    printf(time_str);
+    printf("\n");
     
     // Format minutes
-    prinf("  Minutes: ");
+    printf("  Minutes: ");
     itoa(current_minutes, time_str, 10);
-    prinf(time_str);
-    prinf("\n");
+    printf(time_str);
+    printf("\n");
     
     // Format seconds
-    prinf("  Seconds: ");
+    printf("  Seconds: ");
     itoa(current_seconds, time_str, 10);
-    prinf(time_str);
-    prinf("\n");
+    printf(time_str);
+    printf("\n");
     
     // Also display formatted time
-    prinf("Formatted time: ");
+    printf("Formatted time: ");
     time_str[0] = (current_hours / 10) + '0';
     time_str[1] = (current_hours % 10) + '0';
     time_str[2] = ':';
@@ -957,8 +951,8 @@ void cmd_time() {
     time_str[6] = (current_seconds / 10) + '0';
     time_str[7] = (current_seconds % 10) + '0';
     time_str[8] = '\0';
-    prinf(time_str);
-    prinf("\n");
+    printf(time_str);
+    printf("\n");
 }
 
 /* Modified kernel_main function */
@@ -975,10 +969,10 @@ void kernel_main() {
     init_rtc();
 	
     enumerate_pci_devices();	
-    prinf("Initialization complete. Start typing commands...\n");
+    printf("Initialization complete. Start typing commands...\n");
 
     /* Display initial prompt */
-    prinf("> ");
+    printf("> ");
     
     /* Reset command buffer */
     command_length = 0;

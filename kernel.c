@@ -950,6 +950,9 @@ void kernel_main() {
         }
     }
 
+	nvme_test();
+
+
 	printf("Initialization complete. Start typing commands...\n");
 
     /* Display initial prompt */

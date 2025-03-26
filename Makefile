@@ -17,11 +17,13 @@ $(MAIN):
 
 	gcc -c sata.c -ffreestanding -m32 -o sata.o -std=gnu99
 
+	gcc -c nvme.c -ffreestanding -m32 -o nvme.o -std=gnu99
+
 	gcc -c io.c -ffreestanding -m32 -o io.o -std=gnu99
 
 	gcc -c pci.c -ffreestanding -m32 -o pci.o -std=gnu99
 
-	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o sata.o hardware_specs.o io.o pci.o stdio.o -lgcc -lc
+	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o sata.o nvme.o hardware_specs.o io.o pci.o stdio.o -lgcc -lc
 	grub-mkrescue -o '$@' '$(ISODIR)'
 
 clean:

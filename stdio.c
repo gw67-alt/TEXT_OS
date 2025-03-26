@@ -273,7 +273,6 @@ int vsprintf(char* buffer, const char* format, va_list args) {
     return vsnprintf(buffer, (size_t)-1, format, args);
 }
 
-// Super simple printf - only handles %s, %d, %x and %c
 int printf(const char* format, ...) {
     va_list args;
     va_start(args, format);
@@ -283,96 +282,404 @@ int printf(const char* format, ...) {
         if (*format == '%') {
             format++;
             
+            // Flag parsing
+            bool left_justify = false;  // '-' flag
+            bool plus_sign = false;     // '+' flag
+            bool space_prefix = false;  // ' ' flag
+            bool zero_pad = false;      // '0' flag
+            bool alternate_form = false; // '#' flag
+            
+            // Parse flags
+            bool parsing_flags = true;
+            while (parsing_flags) {
+                switch (*format) {
+                    case '-': left_justify = true; format++; break;
+                    case '+': plus_sign = true; format++; break;
+                    case ' ': space_prefix = true; format++; break;
+                    case '0': zero_pad = true; format++; break;
+                    case '#': alternate_form = true; format++; break;
+                    default: parsing_flags = false; break;
+                }
+            }
+            
+            // Width parsing
+            int width = 0;
+            if (*format == '*') {
+                // Width from argument
+                width = va_arg(args, int);
+                if (width < 0) {
+                    left_justify = true;
+                    width = -width;
+                }
+                format++;
+            } else while (*format >= '0' && *format <= '9') {
+                width = width * 10 + (*format - '0');
+                format++;
+            }
+            
+            // Precision parsing
+            int precision = -1;  // Default (unspecified)
+            if (*format == '.') {
+                format++;
+                precision = 0;  // Default for specified but empty precision
+                if (*format == '*') {
+                    // Precision from argument
+                    precision = va_arg(args, int);
+                    if (precision < 0) precision = -1;  // Negative means unspecified
+                    format++;
+                } else while (*format >= '0' && *format <= '9') {
+                    precision = precision * 10 + (*format - '0');
+                    format++;
+                }
+            }
+            
+            // Length modifier parsing
+            enum {
+                LENGTH_NONE,
+                LENGTH_HH,  // char
+                LENGTH_H,   // short
+                LENGTH_L,   // long
+                LENGTH_LL,  // long long
+                LENGTH_Z,   // size_t
+                LENGTH_J,   // intmax_t
+                LENGTH_T    // ptrdiff_t
+            } length = LENGTH_NONE;
+            
+            switch (*format) {
+                case 'h':
+                    format++;
+                    if (*format == 'h') {
+                        length = LENGTH_HH;
+                        format++;
+                    } else {
+                        length = LENGTH_H;
+                    }
+                    break;
+                case 'l':
+                    format++;
+                    if (*format == 'l') {
+                        length = LENGTH_LL;
+                        format++;
+                    } else {
+                        length = LENGTH_L;
+                    }
+                    break;
+                case 'z':
+                    length = LENGTH_Z;
+                    format++;
+                    break;
+                case 'j':
+                    length = LENGTH_J;
+                    format++;
+                    break;
+                case 't':
+                    length = LENGTH_T;
+                    format++;
+                    break;
+            }
+            
+            // Format specifier
+            char buffer[32];  // For number conversion
+            const char* str = NULL;
+            int str_len = 0;
+            int num_len = 0;
+            bool is_upper = false;
+            bool is_signed = false;
+            int base = 10;
+            unsigned long long int unum = 0;
+            long long int snum = 0;
+            
+            // Process format specifier
             switch (*format) {
                 case 's': {
-                    const char* str = va_arg(args, const char*);
+                    str = va_arg(args, const char*);
                     if (str == NULL) str = "(null)";
-                    while (*str) {
-                        terminal_putchar(*str++);
-                        count++;
-                    }
-                    break;
-                }
-                case 'd': {
-                    int num = va_arg(args, int);
-                    if (num < 0) {
-                        terminal_putchar('-');
-                        count++;
-                        num = -num;
+                    
+                    // Calculate string length
+                    const char* s = str;
+                    str_len = 0;
+                    while (*s) {
+                        str_len++;
+                        s++;
                     }
                     
-                    // Handle zero case
-                    if (num == 0) {
-                        terminal_putchar('0');
-                        count++;
-                        break;
-                    }
-                    
-                    // Convert to string
-                    char digits[12]; // Enough for 32-bit int
-                    int i = 0;
-                    while (num > 0) {
-                        digits[i++] = '0' + (num % 10);
-                        num /= 10;
-                    }
-                    
-                    // Print in reverse
-                    while (i > 0) {
-                        terminal_putchar(digits[--i]);
-                        count++;
-                    }
-                    break;
-                }
-                case 'x': {
-                    unsigned int num = va_arg(args, unsigned int);
-                    
-                    // Handle zero case
-                    if (num == 0) {
-                        terminal_putchar('0');
-                        count++;
-                        break;
-                    }
-                    
-                    // Convert to hex
-                    char digits[8]; // Enough for 32-bit hex
-                    int i = 0;
-                    while (num > 0) {
-                        unsigned int digit = num & 0xF;
-                        digits[i++] = digit < 10 ? '0' + digit : 'a' + (digit - 10);
-                        num >>= 4;
-                    }
-                    
-                    // Print in reverse
-                    while (i > 0) {
-                        terminal_putchar(digits[--i]);
-                        count++;
+                    // Apply precision to truncate if needed
+                    if (precision >= 0 && str_len > precision) {
+                        str_len = precision;
                     }
                     break;
                 }
                 case 'c': {
-                    // Note: char is promoted to int when passed through ...
-                    char c = va_arg(args, int);
-                    terminal_putchar(c);
-                    count++;
+                    buffer[0] = (char)va_arg(args, int);
+                    str = buffer;
+                    str_len = 1;
                     break;
                 }
+                case 'd':
+                case 'i': {
+                    is_signed = true;
+                    base = 10;
+                    // Get the argument according to length modifier
+                    switch (length) {
+                        case LENGTH_HH: snum = (signed char)va_arg(args, int); break;
+                        case LENGTH_H:  snum = (short)va_arg(args, int); break;
+                        case LENGTH_L:  snum = va_arg(args, long); break;
+                        case LENGTH_LL: snum = va_arg(args, long long); break;
+                        case LENGTH_Z:  snum = va_arg(args, size_t); break;
+                        case LENGTH_J:  snum = va_arg(args, intmax_t); break;
+                        case LENGTH_T:  snum = va_arg(args, ptrdiff_t); break;
+                        default:        snum = va_arg(args, int); break;
+                    }
+                    
+                    // Handle sign
+                    bool negative = false;
+                    if (snum < 0) {
+                        unum = -snum;
+                        negative = true;
+                    } else {
+                        unum = snum;
+                    }
+                    
+                    // Convert to string
+                    if (unum == 0) {
+                        buffer[0] = '0';
+                        num_len = 1;
+                    } else {
+                        num_len = 0;
+                        while (unum > 0) {
+                            buffer[num_len++] = '0' + (unum % 10);
+                            unum /= 10;
+                        }
+                    }
+                    
+                    // Add sign or space
+                    char sign_char = 0;
+                    if (negative) {
+                        sign_char = '-';
+                    } else if (plus_sign) {
+                        sign_char = '+';
+                    } else if (space_prefix) {
+                        sign_char = ' ';
+                    }
+                    
+                    // Print the number
+                    int pad_len = width - num_len - (sign_char ? 1 : 0);
+                    
+                    // Padding before sign/number if right-aligned with spaces
+                    if (!left_justify && !zero_pad && pad_len > 0) {
+                        for (int i = 0; i < pad_len; i++) {
+                            terminal_putchar(' ');
+                            count++;
+                        }
+                        pad_len = 0;
+                    }
+                    
+                    // Print sign if needed
+                    if (sign_char) {
+                        terminal_putchar(sign_char);
+                        count++;
+                    }
+                    
+                    // Padding after sign if zero-padded
+                    if (!left_justify && zero_pad && pad_len > 0) {
+                        for (int i = 0; i < pad_len; i++) {
+                            terminal_putchar('0');
+                            count++;
+                        }
+                    }
+                    
+                    // Print the digits in reverse order
+                    for (int i = num_len - 1; i >= 0; i--) {
+                        terminal_putchar(buffer[i]);
+                        count++;
+                    }
+                    
+                    // Padding after number if left-aligned
+                    if (left_justify && pad_len > 0) {
+                        for (int i = 0; i < pad_len; i++) {
+                            terminal_putchar(' ');
+                            count++;
+                        }
+                    }
+                    
+                    format++;
+                    continue;  // Skip the default handling
+                }
+                case 'u': {
+                    is_signed = false;
+                    base = 10;
+                    goto handle_unsigned;
+                }
+                case 'o': {
+                    is_signed = false;
+                    base = 8;
+                    goto handle_unsigned;
+                }
+                case 'x': {
+                    is_signed = false;
+                    base = 16;
+                    is_upper = false;
+                    goto handle_unsigned;
+                }
+                case 'X': {
+                    is_signed = false;
+                    base = 16;
+                    is_upper = true;
+                    goto handle_unsigned;
+                }
+                case 'p': {
+                    is_signed = false;
+                    base = 16;
+                    is_upper = false;
+                    unum = (uintptr_t)va_arg(args, void*);
+                    alternate_form = true;  // Force 0x prefix
+                    zero_pad = true;        // Usually padded with zeros
+                    width = width > 8 ? width : 8;  // Minimum width for pointers
+                    goto format_unsigned;
+                }
+handle_unsigned:
+                    // Get the argument according to length modifier
+                    switch (length) {
+                        case LENGTH_HH: unum = (unsigned char)va_arg(args, unsigned int); break;
+                        case LENGTH_H:  unum = (unsigned short)va_arg(args, unsigned int); break;
+                        case LENGTH_L:  unum = va_arg(args, unsigned long); break;
+                        case LENGTH_LL: unum = va_arg(args, unsigned long long); break;
+                        case LENGTH_Z:  unum = va_arg(args, size_t); break;
+                        case LENGTH_J:  unum = va_arg(args, uintmax_t); break;
+                        case LENGTH_T:  unum = va_arg(args, ptrdiff_t); break;
+                        default:        unum = va_arg(args, unsigned int); break;
+                    }
+format_unsigned:
+                    // Convert to string
+                    if (unum == 0) {
+                        buffer[0] = '0';
+                        num_len = 1;
+                    } else {
+                        const char* digits = is_upper ? "0123456789ABCDEF" : "0123456789abcdef";
+                        num_len = 0;
+                        while (unum > 0) {
+                            buffer[num_len++] = digits[unum % base];
+                            unum /= base;
+                        }
+                    }
+                    
+                    // Calculate prefix
+                    const char* prefix = "";
+                    int prefix_len = 0;
+                    if (alternate_form && base == 16 && num_len > 0 && buffer[0] != '0') {
+                        prefix = is_upper ? "0X" : "0x";
+                        prefix_len = 2;
+                    } else if (alternate_form && base == 8 && (num_len == 0 || buffer[0] != '0')) {
+                        prefix = "0";
+                        prefix_len = 1;
+                    }
+                    
+                    // Calculate padding
+                    int pad_len = width - num_len - prefix_len;
+                    
+                    // Padding before prefix/number if right-aligned with spaces
+                    if (!left_justify && !zero_pad && pad_len > 0) {
+                        for (int i = 0; i < pad_len; i++) {
+                            terminal_putchar(' ');
+                            count++;
+                        }
+                        pad_len = 0;
+                    }
+                    
+                    // Print prefix if needed
+                    for (int i = 0; i < prefix_len; i++) {
+                        terminal_putchar(prefix[i]);
+                        count++;
+                    }
+                    
+                    // Padding after prefix if zero-padded
+                    if (!left_justify && zero_pad && pad_len > 0) {
+                        for (int i = 0; i < pad_len; i++) {
+                            terminal_putchar('0');
+                            count++;
+                        }
+                    }
+                    
+                    // Print the digits in reverse order
+                    for (int i = num_len - 1; i >= 0; i--) {
+                        terminal_putchar(buffer[i]);
+                        count++;
+                    }
+                    
+                    // Padding after number if left-aligned
+                    if (left_justify && pad_len > 0) {
+                        for (int i = 0; i < pad_len; i++) {
+                            terminal_putchar(' ');
+                            count++;
+                        }
+                    }
+                    
+                    format++;
+                    continue;  // Skip the default handling
                 case '%': {
                     terminal_putchar('%');
                     count++;
-                    break;
+                    format++;
+                    continue;
+                }
+                case 'n': {
+                    // Store the number of characters written so far
+                    switch (length) {
+                        case LENGTH_HH: *va_arg(args, signed char*) = count; break;
+                        case LENGTH_H:  *va_arg(args, short*) = count; break;
+                        case LENGTH_L:  *va_arg(args, long*) = count; break;
+                        case LENGTH_LL: *va_arg(args, long long*) = count; break;
+                        case LENGTH_Z:  *va_arg(args, size_t*) = count; break;
+                        case LENGTH_J:  *va_arg(args, intmax_t*) = count; break;
+                        case LENGTH_T:  *va_arg(args, ptrdiff_t*) = count; break;
+                        default:        *va_arg(args, int*) = count; break;
+                    }
+                    format++;
+                    continue;
                 }
                 default: {
                     // Unknown format specifier, just output it
                     terminal_putchar('%');
                     terminal_putchar(*format);
                     count += 2;
-                    break;
+                    format++;
+                    continue;
                 }
             }
+            
+            // Common code for formats that produce a string (s, c)
+            if (str != NULL) {
+                // Calculate padding
+                int pad_len = width - str_len;
+                
+                // Padding before string if right-aligned
+                if (!left_justify && pad_len > 0) {
+                    char pad_char = zero_pad ? '0' : ' ';
+                    for (int i = 0; i < pad_len; i++) {
+                        terminal_putchar(pad_char);
+                        count++;
+                    }
+                }
+                
+                // Print string, respecting precision limit
+                for (int i = 0; i < str_len; i++) {
+                    terminal_putchar(str[i]);
+                    count++;
+                }
+                
+                // Padding after string if left-aligned
+                if (left_justify && pad_len > 0) {
+                    for (int i = 0; i < pad_len; i++) {
+                        terminal_putchar(' ');
+                        count++;
+                    }
+                }
+            }
+            
         } else if (*format == '\n') {
-            // Handle newline specially for terminal
+            // Handle newline specially
             terminal_putchar('\n');
-            count += 2;
+            count++; // Changed from count+=2 to count++ to correctly count newlines as one character
         } else {
             terminal_putchar(*format);
             count++;
@@ -384,7 +691,8 @@ int printf(const char* format, ...) {
     va_end(args);
     return count;
 }
-
+			
+			
 // Custom implementation of strstr function
 const char* strstr(const char* haystack, const char* needle) {
     if (!haystack || !needle || !*needle) {

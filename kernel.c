@@ -5,6 +5,13 @@
 #include "hardware_specs.h"
 #include "io.h"
 #include "stdio.h"
+#include "sata.h"
+
+
+#define SATA_STATUS_DET_MASK      0x0F  // Device Detection
+#define SATA_STATUS_IPM_MASK      0xF00 // Interface Power Management
+#define SATA_STATUS_DET_PRESENT   0x03  // Device Present and Established Communication
+#define SATA_STATUS_IPM_ACTIVE    0x100 // Active State
 
 /* Check if the compiler thinks we are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -926,9 +933,23 @@ void kernel_main() {
 	
     enumerate_pci_devices();	
 
+	init_sata_interface();
+    
+    // Get the first active port
+    int active_port = -1;
+    for (int i = 0; i < 32; i++) {
+        if (hba_mem && (hba_mem->pi & (1 << i))) {
+            uint32_t ssts = hba_mem->ports[i].ssts;
+            uint8_t det = (ssts & SATA_STATUS_DET_MASK);
+            uint16_t ipm = (ssts & SATA_STATUS_IPM_MASK) >> 8;
+            
+            if (det == SATA_STATUS_DET_PRESENT && ipm == (SATA_STATUS_IPM_ACTIVE >> 8)) {
+                active_port = i;
+                break;
+            }
+        }
+    }
 
-
-	ahci_demo();
 	printf("Initialization complete. Start typing commands...\n");
 
     /* Display initial prompt */

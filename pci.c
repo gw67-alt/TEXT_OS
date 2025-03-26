@@ -1,366 +1,528 @@
-#include <stdint.h>
 #include <stdbool.h>
-#include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
+#include "io.h"
+#include "pci.h"
 #include "stdio.h"
-#include "driver.h"
 
+/* PCI configuration space access ports */
+#define PCI_CONFIG_ADDRESS  0xCF8
+#define PCI_CONFIG_DATA     0xCFC
 
-// PCI Configuration Space Access Ports
-#define PCI_CONFIG_ADDRESS 0xCF8
-#define PCI_CONFIG_DATA    0xCFC
-
-// PCI Class Codes
-#define PCI_CLASS_STORAGE             0x01
-#define PCI_SUBCLASS_SATA             0x06
-#define PCI_PROG_IF_AHCI              0x01
-
-// PCI Configuration Space Register Offsets
-#define PCI_VENDOR_ID                 0x00 // 2 bytes
-#define PCI_DEVICE_ID                 0x02 // 2 bytes
-#define PCI_COMMAND                   0x04 // 2 bytes
-#define PCI_STATUS                    0x06 // 2 bytes
-#define PCI_REVISION_ID               0x08 // 1 byte
-#define PCI_PROG_IF                   0x09 // 1 byte
-#define PCI_SUBCLASS                  0x0A // 1 byte
-#define PCI_CLASS                     0x0B // 1 byte
-#define PCI_HEADER_TYPE               0x0E // 1 byte
-#define PCI_BAR5                      0x24 // 4 bytes (AHCI base address register)
-#define PCI_CAPABILITY_LIST           0x34 // 1 byte
-
-// PCI Command Register Bits
-#define PCI_COMMAND_IO_SPACE          0x0001
-#define PCI_COMMAND_MEMORY_SPACE      0x0002
-#define PCI_COMMAND_BUS_MASTER        0x0004
-#define PCI_COMMAND_INTERRUPTS        0x0400
-
-// Common PCI Class Codes for device identification
-typedef struct {
+/* PCI device identifier structure */
+struct pci_device_id {
+    uint16_t vendor_id;
+    uint16_t device_id;
     uint8_t class_code;
     uint8_t subclass;
+    uint8_t prog_if;
     const char* name;
-} pci_class_name_t;
-
-// Table of common PCI device classes
-static const pci_class_name_t pci_class_names[] = {
-    {0x00, 0x00, "Non-VGA-Compatible Unclassified Device"},
-    {0x00, 0x01, "VGA-Compatible Unclassified Device"},
-    {0x01, 0x00, "SCSI Bus Controller"},
-    {0x01, 0x01, "IDE Controller"},
-    {0x01, 0x02, "Floppy Disk Controller"},
-    {0x01, 0x03, "IPI Bus Controller"},
-    {0x01, 0x04, "RAID Controller"},
-    {0x01, 0x05, "ATA Controller"},
-    {0x01, 0x06, "SATA Controller"},
-    {0x01, 0x07, "Serial Attached SCSI Controller"},
-    {0x01, 0x08, "Non-Volatile Memory Controller"},
-    {0x01, 0x80, "Other Mass Storage Controller"},
-    {0x02, 0x00, "Ethernet Controller"},
-    {0x02, 0x01, "Token Ring Controller"},
-    {0x02, 0x02, "FDDI Controller"},
-    {0x02, 0x03, "ATM Controller"},
-    {0x02, 0x04, "ISDN Controller"},
-    {0x02, 0x05, "WorldFip Controller"},
-    {0x02, 0x06, "PICMG 2.14 Multi Computing"},
-    {0x02, 0x07, "Infiniband Controller"},
-    {0x02, 0x08, "Fabric Controller"},
-    {0x02, 0x80, "Other Network Controller"},
-    {0x03, 0x00, "VGA Compatible Controller"},
-    {0x03, 0x01, "XGA Controller"},
-    {0x03, 0x02, "3D Controller"},
-    {0x03, 0x80, "Other Display Controller"},
-    {0x04, 0x00, "Multimedia Video Controller"},
-    {0x04, 0x01, "Multimedia Audio Controller"},
-    {0x04, 0x02, "Computer Telephony Device"},
-    {0x04, 0x03, "Audio Device"},
-    {0x04, 0x80, "Other Multimedia Controller"},
-    {0x05, 0x00, "RAM Controller"},
-    {0x05, 0x01, "Flash Controller"},
-    {0x05, 0x80, "Other Memory Controller"},
-    {0x06, 0x00, "Host Bridge"},
-    {0x06, 0x01, "ISA Bridge"},
-    {0x06, 0x02, "EISA Bridge"},
-    {0x06, 0x03, "MCA Bridge"},
-    {0x06, 0x04, "PCI-to-PCI Bridge"},
-    {0x06, 0x05, "PCMCIA Bridge"},
-    {0x06, 0x06, "NuBus Bridge"},
-    {0x06, 0x07, "CardBus Bridge"},
-    {0x06, 0x08, "RACEway Bridge"},
-    {0x06, 0x09, "PCI-to-PCI Bridge"},
-    {0x06, 0x0A, "InfiniBand-to-PCI Host Bridge"},
-    {0x06, 0x80, "Other Bridge"},
-    {0x07, 0x00, "Serial Controller"},
-    {0x07, 0x01, "Parallel Controller"},
-    {0x07, 0x02, "Multiport Serial Controller"},
-    {0x07, 0x03, "Modem"},
-    {0x07, 0x04, "GPIB Controller"},
-    {0x07, 0x05, "Smart Card Controller"},
-    {0x07, 0x80, "Other Communications Device"},
-    {0x08, 0x00, "PIC"},
-    {0x08, 0x01, "DMA Controller"},
-    {0x08, 0x02, "Timer"},
-    {0x08, 0x03, "RTC Controller"},
-    {0x08, 0x04, "PCI Hot-Plug Controller"},
-    {0x08, 0x05, "SD Host Controller"},
-    {0x08, 0x06, "IOMMU"},
-    {0x08, 0x80, "Other System Peripheral"},
-    {0x09, 0x00, "Keyboard Controller"},
-    {0x09, 0x01, "Digitizer Pen"},
-    {0x09, 0x02, "Mouse Controller"},
-    {0x09, 0x03, "Scanner Controller"},
-    {0x09, 0x04, "Gameport Controller"},
-    {0x09, 0x80, "Other Input Controller"},
-    {0x0A, 0x00, "Generic Docking Station"},
-    {0x0A, 0x80, "Other Docking Station"},
-    {0x0B, 0x00, "386 Processor"},
-    {0x0B, 0x01, "486 Processor"},
-    {0x0B, 0x02, "Pentium Processor"},
-    {0x0B, 0x10, "Alpha Processor"},
-    {0x0B, 0x20, "PowerPC Processor"},
-    {0x0B, 0x30, "MIPS Processor"},
-    {0x0B, 0x40, "Co-Processor"},
-    {0x0B, 0x80, "Other Processor"},
-    {0x0C, 0x00, "FireWire (IEEE 1394) Controller"},
-    {0x0C, 0x01, "ACCESS Bus Controller"},
-    {0x0C, 0x02, "SSA Controller"},
-    {0x0C, 0x03, "USB Controller"},
-    {0x0C, 0x04, "Fibre Channel Controller"},
-    {0x0C, 0x05, "SMBus Controller"},
-    {0x0C, 0x06, "InfiniBand Controller"},
-    {0x0C, 0x07, "IPMI Interface"},
-    {0x0C, 0x08, "SERCOS Interface"},
-    {0x0C, 0x09, "CANbus Controller"},
-    {0x0C, 0x80, "Other Serial Bus Controller"},
-    {0x0D, 0x00, "IRDA Controller"},
-    {0x0D, 0x01, "Consumer IR Controller"},
-    {0x0D, 0x10, "RF Controller"},
-    {0x0D, 0x11, "Bluetooth Controller"},
-    {0x0D, 0x12, "Broadband Controller"},
-    {0x0D, 0x20, "Ethernet Controller (802.1a)"},
-    {0x0D, 0x21, "Ethernet Controller (802.1b)"},
-    {0x0D, 0x80, "Other Wireless Controller"},
-    {0x0E, 0x00, "I2O Controller"},
-    {0x0F, 0x01, "Satellite TV Controller"},
-    {0x0F, 0x02, "Satellite Audio Controller"},
-    {0x0F, 0x03, "Satellite Voice Controller"},
-    {0x0F, 0x04, "Satellite Data Controller"},
-    {0x10, 0x00, "Network and Computing Encryption Device"},
-    {0x10, 0x10, "Entertainment Encryption Device"},
-    {0x10, 0x80, "Other Encryption Controller"},
-    {0x11, 0x00, "DPIO Modules"},
-    {0x11, 0x01, "Performance Counters"},
-    {0x11, 0x10, "Communications Synchronization Plus Time and Frequency Test/Measurement"},
-    {0x11, 0x20, "Management Card"},
-    {0x11, 0x80, "Other Data Acquisition/Signal Processing Controller"},
-    {0xFF, 0xFF, "Unknown Device"}
 };
 
-// Create a PCI address from bus, device, function, and register
-static uint32_t pci_make_address(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg) {
-    uint32_t address = 0;
-    address |= (uint32_t)0x80000000;    // Enable bit (bit 31)
-    address |= (uint32_t)(bus << 16);   // Bus (bits 16-23)
-    address |= (uint32_t)(device << 11); // Device (bits 11-15)
-    address |= (uint32_t)(function << 8); // Function (bits 8-10)
-    address |= (uint32_t)(reg & 0xFC);  // Register (bits 2-7)
-    return address;
-}
-
-// Read 8 bits from PCI configuration space
-static uint8_t pci_config_read8(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg) {
-    uint32_t address = pci_make_address(bus, device, function, reg);
-    outl(PCI_CONFIG_ADDRESS, address);
+/* Table of known PCI devices - can be extended with more entries */
+static const struct pci_device_id known_devices[] = {
+    /* Mass Storage Controllers */
+    {0x8086, 0x2922, 0x01, 0x06, 0x01, "Intel ICH9 AHCI Controller"},
+    {0x8086, 0x2829, 0x01, 0x06, 0x01, "Intel ICH8M AHCI Controller"},
+    {0x8086, 0x3B22, 0x01, 0x06, 0x01, "Intel 5 Series/3400 Series AHCI Controller"},
+    {0x8086, 0x3B32, 0x01, 0x06, 0x01, "Intel 5 Series/3400 Series AHCI Controller"},
+    {0x1022, 0x7801, 0x01, 0x06, 0x01, "AMD AHCI Controller"},
+    {0x1002, 0x4380, 0x01, 0x06, 0x01, "AMD AHCI Controller"},
+    {0x1B4B, 0x9172, 0x01, 0x06, 0x01, "Marvell AHCI Controller"},
+    {0x1B4B, 0x9182, 0x01, 0x06, 0x01, "Marvell AHCI Controller"},
     
-    // Read from the appropriate byte of the 32-bit register
-    uint8_t offset = reg & 0x03;
-    uint8_t value = (uint8_t)((inl(PCI_CONFIG_DATA) >> (offset * 8)) & 0xFF);
-    return value;
-}
-
-// Read 16 bits from PCI configuration space
-static uint16_t pci_config_read16(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg) {
-    uint32_t address = pci_make_address(bus, device, function, reg);
-    outl(PCI_CONFIG_ADDRESS, address);
+    /* Network Controllers */
+    {0x8086, 0x100E, 0x02, 0x00, 0x00, "Intel PRO/1000 Network Controller"},
+    {0x8086, 0x10EA, 0x02, 0x00, 0x00, "Intel I217 Network Controller"},
+    {0x8086, 0x153A, 0x02, 0x00, 0x00, "Intel I217-LM Network Controller"},
+    {0x8086, 0x15A3, 0x02, 0x00, 0x00, "Intel I219-LM Network Controller"},
+    {0x10EC, 0x8168, 0x02, 0x00, 0x00, "Realtek RTL8168 Network Controller"},
     
-    // Read from the appropriate 16-bits of the 32-bit register
-    uint8_t offset = (reg & 0x02) >> 1;
-    uint16_t value = (uint16_t)((inl(PCI_CONFIG_DATA) >> (offset * 16)) & 0xFFFF);
-    return value;
+    /* Display Controllers */
+    {0x8086, 0x0046, 0x03, 0x00, 0x00, "Intel HD Graphics"},
+    {0x8086, 0x0162, 0x03, 0x00, 0x00, "Intel HD Graphics 4000"},
+    {0x1002, 0x9802, 0x03, 0x00, 0x00, "AMD Radeon HD 7000 Series"},
+    {0x10DE, 0x0641, 0x03, 0x00, 0x00, "NVIDIA GeForce GT 630"},
+    
+    /* End of table */
+    {0, 0, 0, 0, 0, NULL}
+};
+
+/* Forward declarations */
+const char* get_device_name(uint16_t vendor_id, uint16_t device_id, 
+                           uint8_t class_code, uint8_t subclass, uint8_t prog_if);
+const char* get_class_name(uint8_t class_code, uint8_t subclass, uint8_t prog_if);
+
+/* Generate a PCI configuration address */
+static uint32_t pci_get_address(uint8_t bus, uint8_t device, 
+                               uint8_t function, uint8_t offset) {
+    return (uint32_t)(((uint32_t)bus << 16) | 
+                     ((uint32_t)(device & 0x1F) << 11) |
+                     ((uint32_t)(function & 0x07) << 8) | 
+                     (offset & 0xFC) | 
+                     ((uint32_t)0x80000000));
 }
 
-// Read 32 bits from PCI configuration space
-static uint32_t pci_config_read32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg) {
-    uint32_t address = pci_make_address(bus, device, function, reg);
+/* Read a byte from PCI configuration space */
+uint8_t pci_config_read_byte(uint8_t bus, uint8_t device, 
+                            uint8_t function, uint8_t offset) {
+    uint32_t address = pci_get_address(bus, device, function, offset);
+    outl(PCI_CONFIG_ADDRESS, address);
+    return inb(PCI_CONFIG_DATA + (offset & 0x03));
+}
+
+/* Read a word (16 bits) from PCI configuration space */
+uint16_t pci_config_read_word(uint8_t bus, uint8_t device, 
+                             uint8_t function, uint8_t offset) {
+    uint32_t address = pci_get_address(bus, device, function, offset);
+    outl(PCI_CONFIG_ADDRESS, address);
+    return inw(PCI_CONFIG_DATA + (offset & 0x02));
+}
+
+/* Read a dword (32 bits) from PCI configuration space */
+uint32_t pci_config_read_dword(uint8_t bus, uint8_t device, 
+                              uint8_t function, uint8_t offset) {
+    uint32_t address = pci_get_address(bus, device, function, offset);
     outl(PCI_CONFIG_ADDRESS, address);
     return inl(PCI_CONFIG_DATA);
 }
 
-// Write 32 bits to PCI configuration space
-static void pci_config_write32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg, uint32_t value) {
-    uint32_t address = pci_make_address(bus, device, function, reg);
+/* Write a byte to PCI configuration space */
+void pci_config_write_byte(uint8_t bus, uint8_t device, 
+                          uint8_t function, uint8_t offset, uint8_t value) {
+    uint32_t address = pci_get_address(bus, device, function, offset);
+    outl(PCI_CONFIG_ADDRESS, address);
+    outb(PCI_CONFIG_DATA + (offset & 0x03), value);
+}
+
+/* Write a word (16 bits) to PCI configuration space */
+void pci_config_write_word(uint8_t bus, uint8_t device, 
+                          uint8_t function, uint8_t offset, uint16_t value) {
+    uint32_t address = pci_get_address(bus, device, function, offset);
+    outl(PCI_CONFIG_ADDRESS, address);
+    outw(PCI_CONFIG_DATA + (offset & 0x02), value);
+}
+
+/* Write a dword (32 bits) to PCI configuration space */
+void pci_config_write_dword(uint8_t bus, uint8_t device, 
+                           uint8_t function, uint8_t offset, uint32_t value) {
+    uint32_t address = pci_get_address(bus, device, function, offset);
     outl(PCI_CONFIG_ADDRESS, address);
     outl(PCI_CONFIG_DATA, value);
 }
 
-// Write 16 bits to PCI configuration space
-static void pci_config_write16(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg, uint16_t value) {
-    uint32_t address = pci_make_address(bus, device, function, reg);
-    outl(PCI_CONFIG_ADDRESS, address);
-    
-    uint32_t data = inl(PCI_CONFIG_DATA);
-    uint8_t offset = (reg & 0x02) >> 1;
-    data &= ~(0xFFFF << (offset * 16));
-    data |= ((uint32_t)value << (offset * 16));
-    
-    outl(PCI_CONFIG_DATA, data);
-}
-
-// Check if a PCI device exists
+/* Check if a device exists */
 static bool pci_device_exists(uint8_t bus, uint8_t device, uint8_t function) {
-    uint16_t vendor = pci_config_read16(bus, device, function, PCI_VENDOR_ID);
-    return vendor != 0xFFFF; // 0xFFFF indicates no device
+    uint16_t vendor_id = pci_config_read_word(bus, device, function, 0x00);
+    return vendor_id != 0xFFFF; // 0xFFFF indicates no device
 }
 
-// Get device type name based on class and subclass codes
-static const char* pci_get_device_type_name(uint8_t class_code, uint8_t subclass) {
-    for (int i = 0; i < sizeof(pci_class_names) / sizeof(pci_class_name_t); i++) {
-        if (pci_class_names[i].class_code == class_code && 
-            pci_class_names[i].subclass == subclass) {
-            return pci_class_names[i].name;
-        }
+/* Get PCI device details */
+struct pci_device pci_get_device_info(uint8_t bus, uint8_t device, uint8_t function) {
+    struct pci_device dev;
+    
+    dev.bus = bus;
+    dev.device = device;
+    dev.function = function;
+    
+    dev.vendor_id = pci_config_read_word(bus, device, function, 0x00);
+    dev.device_id = pci_config_read_word(bus, device, function, 0x02);
+    
+    dev.command = pci_config_read_word(bus, device, function, 0x04);
+    dev.status = pci_config_read_word(bus, device, function, 0x06);
+    
+    dev.revision_id = pci_config_read_byte(bus, device, function, 0x08);
+    dev.prog_if = pci_config_read_byte(bus, device, function, 0x09);
+    dev.subclass = pci_config_read_byte(bus, device, function, 0x0A);
+    dev.class_code = pci_config_read_byte(bus, device, function, 0x0B);
+    
+    dev.cache_line_size = pci_config_read_byte(bus, device, function, 0x0C);
+    dev.latency_timer = pci_config_read_byte(bus, device, function, 0x0D);
+    dev.header_type = pci_config_read_byte(bus, device, function, 0x0E);
+    dev.bist = pci_config_read_byte(bus, device, function, 0x0F);
+    
+    // Read base address registers (BAR0-BAR5)
+    for (int i = 0; i < 6; i++) {
+        dev.bar[i] = pci_config_read_dword(bus, device, function, 0x10 + i * 4);
     }
     
-    // If not found, return the last entry which is "Unknown Device"
-    return pci_class_names[sizeof(pci_class_names) / sizeof(pci_class_name_t) - 1].name;
-}
-
-// Check if a device is an AHCI controller
-static bool is_ahci_controller(uint8_t bus, uint8_t device, uint8_t function) {
-    uint8_t class_code = pci_config_read8(bus, device, function, PCI_CLASS);
-    uint8_t subclass = pci_config_read8(bus, device, function, PCI_SUBCLASS);
-    uint8_t prog_if = pci_config_read8(bus, device, function, PCI_PROG_IF);
-    
-    return (class_code == PCI_CLASS_STORAGE &&
-            subclass == PCI_SUBCLASS_SATA &&
-            prog_if == PCI_PROG_IF_AHCI);
-}
-
-// Enable AHCI controller in PCI configuration
-static void enable_ahci_controller(uint8_t bus, uint8_t device, uint8_t function) {
-    uint16_t command = pci_config_read16(bus, device, function, PCI_COMMAND);
-    
-    // Enable memory space, bus mastering, and interrupts
-    command |= PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER;
-    
-    // Write back the command register
-    pci_config_write16(bus, device, function, PCI_COMMAND, command);
-}
-
-// Get a vendor name from vendor ID (limited set of common vendors)
-static const char* pci_get_vendor_name(uint16_t vendor_id) {
-    switch (vendor_id) {
-        case 0x1022: return "AMD";
-        case 0x1039: return "SiS";
-        case 0x104C: return "Texas Instruments";
-        case 0x10DE: return "NVIDIA";
-        case 0x10EC: return "Realtek";
-        case 0x1106: return "VIA";
-        case 0x1234: return "Bochs/QEMU";
-        case 0x15AD: return "VMware";
-        case 0x1AF4: return "Red Hat/Qumranet (Virtio)";
-        case 0x8086: return "Intel";
-        case 0x80EE: return "VirtualBox";
-        default: return "Unknown Vendor";
+    // Additional fields for different header types - here we only initialize for Type 0
+    if ((dev.header_type & 0x7F) == 0) {
+        dev.cardbus_cis_ptr = pci_config_read_dword(bus, device, function, 0x28);
+        dev.subsystem_vendor_id = pci_config_read_word(bus, device, function, 0x2C);
+        dev.subsystem_id = pci_config_read_word(bus, device, function, 0x2E);
+        dev.expansion_rom_base_addr = pci_config_read_dword(bus, device, function, 0x30);
+        dev.capabilities_ptr = pci_config_read_byte(bus, device, function, 0x34);
+        dev.interrupt_line = pci_config_read_byte(bus, device, function, 0x3C);
+        dev.interrupt_pin = pci_config_read_byte(bus, device, function, 0x3D);
+        dev.min_grant = pci_config_read_byte(bus, device, function, 0x3E);
+        dev.max_latency = pci_config_read_byte(bus, device, function, 0x3F);
     }
+    
+    // Try to identify the device
+    dev.name = get_device_name(dev.vendor_id, dev.device_id, 
+                               dev.class_code, dev.subclass, dev.prog_if);
+    
+    return dev;
 }
 
-// Enumerate all PCI devices and print information about them
+/* Check if a device has multiple functions */
+static bool pci_device_has_functions(uint8_t bus, uint8_t device) {
+    uint8_t header_type = pci_config_read_byte(bus, device, 0, 0x0E);
+    return (header_type & 0x80) != 0;
+}
+
+/* Enumerate all PCI devices */
 void enumerate_pci_devices() {
-    char buffer[100];
+    printf("Enumerating PCI Devices:\n");
+    printf("-------------------------------------------------------------------------\n");
+    printf("| BUS | DEV | FN | VendorID | DeviceID | Class | Type | Name          |\n");
+    printf("-------------------------------------------------------------------------\n");
+    
     int device_count = 0;
     
-    printf("==== PCI Device Enumeration ====\n");
-    
-    // Scan all buses, devices, and functions
+    // Scan all PCI buses
     for (uint16_t bus = 0; bus < 256; bus++) {
         for (uint8_t device = 0; device < 32; device++) {
-            for (uint8_t function = 0; function < 8; function++) {
-                // Check if device exists
-                if (!pci_device_exists(bus, device, function)) {
-                    // Skip to next device if function 0 doesn't exist
-                    if (function == 0) break;
-                    else continue;
-                }
-                ++device_count;
-                // Device found - get details
-                uint16_t vendor_id = pci_config_read16(bus, device, function, PCI_VENDOR_ID);
-                uint16_t device_id = pci_config_read16(bus, device, function, PCI_DEVICE_ID);
-                uint8_t class_code = pci_config_read8(bus, device, function, PCI_CLASS);
-                uint8_t subclass = pci_config_read8(bus, device, function, PCI_SUBCLASS);
-                uint8_t prog_if = pci_config_read8(bus, device, function, PCI_PROG_IF);
-                uint8_t revision = pci_config_read8(bus, device, function, PCI_REVISION_ID);
-                uint8_t header_type = pci_config_read8(bus, device, function, PCI_HEADER_TYPE) & 0x7F;
+            uint8_t function = 0;
+            
+            if (!pci_device_exists(bus, device, function)) {
+                continue;
             }
-        }
-    }
-    
-    if (device_count == 0) {
-        printf("No PCI devices found.\n");
-    } else {
-        printf("Total PCI devices found: %d", device_count);
-		printf("\n");
-    }
-    
-    printf("==== End of PCI Enumeration ====\n\n");
-}
-
-// Find an AHCI controller and return its base address
-uint32_t find_ahci_controller() {
-    char buffer[100];
-    printf("Scanning PCI bus for AHCI controller...\n");
-    
-    // Scan all buses, devices, and functions
-    for (uint16_t bus = 0; bus < 256; bus++) {
-        for (uint8_t device = 0; device < 32; device++) {
-            for (uint8_t function = 0; function < 8; function++) {
-                // Check if device exists
+            
+            // Check if this is a multi-function device
+            bool is_multi_function = pci_device_has_functions(bus, device);
+            
+            // Scan the appropriate number of functions
+            for (function = 0; function < (is_multi_function ? 8 : 1); function++) {
                 if (!pci_device_exists(bus, device, function)) {
-                    // Skip to next device if function 0 doesn't exist
-                    if (function == 0) break;
-                    else continue;
+                    continue;
                 }
                 
-                // Check if this is an AHCI controller
-                if (is_ahci_controller(bus, device, function)) {
-                    printf("Found AHCI controller at PCI %d:%d.%d\n", 
-                            bus, device, function);
-                    
-                    
-                    // Get vendor and device IDs for debugging
-                    uint16_t vendor = pci_config_read16(bus, device, function, PCI_VENDOR_ID);
-                    uint16_t dev_id = pci_config_read16(bus, device, function, PCI_DEVICE_ID);
-                    printf("Vendor: %s (0x%x), Device: 0x%x", 
-                            pci_get_vendor_name(vendor), vendor, dev_id);
-					printf("\n");
-                    
-                    
-                    // Enable the controller
-                    enable_ahci_controller(bus, device, function);
-                    
-                    // Get the AHCI base address from BAR5
-                    uint32_t bar5 = pci_config_read32(bus, device, function, PCI_BAR5);
-                    
-                    // Extract the base address (mask off the lower bits)
-                    uint32_t abar = bar5 & 0xFFFFFFF0;
-                    
-                    printf("AHCI Base Address: 0x%x\n", abar);
-                    
-                    
-                    return abar;
+                // Get device information
+                struct pci_device dev = pci_get_device_info(bus, device, function);
+                
+                // Display device information
+                printf("| %03X | %03X | %02X | %04X     | %04X     | %02X:%02X:%02X | %02X   | %-14s |\n",
+                       bus, device, function,
+                       dev.vendor_id, dev.device_id,
+                       dev.class_code, dev.subclass, dev.prog_if,
+                       dev.header_type & 0x7F,
+                       dev.name ? (strlen(dev.name) > 14 ? 
+                                  (char[]){dev.name[0], dev.name[1], dev.name[2], dev.name[3], 
+                                          dev.name[4], dev.name[5], dev.name[6], dev.name[7], 
+                                          dev.name[8], dev.name[9], dev.name[10], '.', '.', '.'} : dev.name) 
+                                : "Unknown");
+                
+                device_count++;
+            }
+        }
+    }
+    
+    printf("-------------------------------------------------------------------------\n");
+    printf("Total PCI devices found: %d\n", device_count);
+}
+
+/* Get device name from known device table */
+const char* get_device_name(uint16_t vendor_id, uint16_t device_id, 
+                           uint8_t class_code, uint8_t subclass, uint8_t prog_if) {
+    // First try to find an exact match in the known devices table
+    for (int i = 0; known_devices[i].name != NULL; i++) {
+        if (known_devices[i].vendor_id == vendor_id && 
+            known_devices[i].device_id == device_id) {
+            return known_devices[i].name;
+        }
+    }
+    
+    // If no exact match, try to find a class match
+    for (int i = 0; known_devices[i].name != NULL; i++) {
+        if (known_devices[i].class_code == class_code && 
+            known_devices[i].subclass == subclass && 
+            known_devices[i].prog_if == prog_if) {
+            return known_devices[i].name;
+        }
+    }
+    
+    // If no match found, return a generic class description
+    return get_class_name(class_code, subclass, prog_if);
+}
+
+/* Get generic class name based on class/subclass codes */
+const char* get_class_name(uint8_t class_code, uint8_t subclass, uint8_t prog_if) {
+    switch (class_code) {
+        case 0x00:
+            return "Legacy Device";
+        case 0x01:
+            switch (subclass) {
+                case 0x00: return "SCSI Controller";
+                case 0x01: return "IDE Controller";
+                case 0x02: return "Floppy Controller";
+                case 0x03: return "IPI Controller";
+                case 0x04: return "RAID Controller";
+                case 0x05: return "ATA Controller";
+                case 0x06: 
+                    if (prog_if == 0x01) 
+                        return "AHCI Controller";
+                    return "SATA Controller";
+                case 0x07: return "SAS Controller";
+                case 0x08: return "NVMe Controller";
+                default: return "Storage Controller";
+            }
+        case 0x02:
+            switch (subclass) {
+                case 0x00: return "Ethernet Controller";
+                case 0x01: return "Token Ring Controller";
+                case 0x02: return "FDDI Controller";
+                case 0x03: return "ATM Controller";
+                case 0x04: return "ISDN Controller";
+                case 0x05: return "WorldFip Controller";
+                case 0x06: return "PICMG Controller";
+                case 0x07: return "InfiniBand Controller";
+                case 0x08: return "Fabric Controller";
+                default: return "Network Controller";
+            }
+        case 0x03:
+            switch (subclass) {
+                case 0x00: return "VGA Controller";
+                case 0x01: return "XGA Controller";
+                case 0x02: return "3D Controller";
+                default: return "Display Controller";
+            }
+        case 0x04:
+            switch (subclass) {
+                case 0x00: return "Video Controller";
+                case 0x01: return "Audio Controller";
+                case 0x02: return "Phone Controller";
+                case 0x03: return "HD Audio Controller";
+                default: return "Multimedia Controller";
+            }
+        case 0x05:
+            switch (subclass) {
+                case 0x00: return "RAM Controller";
+                case 0x01: return "Flash Controller";
+                default: return "Memory Controller";
+            }
+        case 0x06:
+            switch (subclass) {
+                case 0x00: return "Host Bridge";
+                case 0x01: return "ISA Bridge";
+                case 0x02: return "EISA Bridge";
+                case 0x03: return "MCA Bridge";
+                case 0x04: return "PCI-to-PCI Bridge";
+                case 0x05: return "PCMCIA Bridge";
+                case 0x06: return "NuBus Bridge";
+                case 0x07: return "CardBus Bridge";
+                case 0x08: return "RACEway Bridge";
+                case 0x09: return "Semi-PCI-to-PCI Bridge";
+                case 0x0A: return "InfiniBand-to-PCI Bridge";
+                default: return "Bridge Device";
+            }
+        case 0x07:
+            switch (subclass) {
+                case 0x00: return "Serial Controller";
+                case 0x01: return "Parallel Controller";
+                case 0x02: return "Multiport Serial Controller";
+                case 0x03: return "Modem";
+                case 0x04: return "GPIB Controller";
+                case 0x05: return "Smart Card Controller";
+                default: return "Communication Controller";
+            }
+        case 0x08:
+            switch (subclass) {
+                case 0x00: return "PIC";
+                case 0x01: return "DMA Controller";
+                case 0x02: return "Timer";
+                case 0x03: return "RTC Controller";
+                case 0x04: return "PCI Hot-Plug Controller";
+                case 0x05: return "SD Host Controller";
+                case 0x06: return "IOMMU";
+                default: return "System Peripheral";
+            }
+        case 0x09:
+            switch (subclass) {
+                case 0x00: return "Keyboard Controller";
+                case 0x01: return "Digitizer";
+                case 0x02: return "Mouse Controller";
+                case 0x03: return "Scanner Controller";
+                case 0x04: return "Gameport Controller";
+                default: return "Input Controller";
+            }
+        case 0x0A:
+            return "Docking Station";
+        case 0x0B:
+            return "Processor";
+        case 0x0C:
+            switch (subclass) {
+                case 0x00: return "FireWire Controller";
+                case 0x01: return "ACCESS Bus Controller";
+                case 0x02: return "SSA Controller";
+                case 0x03: 
+                    switch (prog_if) {
+                        case 0x00: return "USB UHCI Controller";
+                        case 0x10: return "USB OHCI Controller";
+                        case 0x20: return "USB EHCI Controller";
+                        case 0x30: return "USB XHCI Controller";
+                        default: return "USB Controller";
+                    }
+                case 0x04: return "Fibre Channel Controller";
+                case 0x05: return "SMBus Controller";
+                case 0x06: return "InfiniBand Controller";
+                case 0x07: return "IPMI Controller";
+                case 0x08: return "SERCOS Controller";
+                case 0x09: return "CANbus Controller";
+                default: return "Serial Bus Controller";
+            }
+        case 0x0D:
+            return "Wireless Controller";
+        case 0x0E:
+            return "Intelligent I/O Controller";
+        case 0x0F:
+            return "Satellite Communication Controller";
+        case 0x10:
+            return "Encryption Controller";
+        case 0x11:
+            return "Signal Processing Controller";
+        case 0x12:
+            return "Processing Accelerator";
+        case 0x13:
+            return "Non-Essential Instrumentation";
+        case 0x40:
+            return "Co-Processor";
+        default:
+            return "Unknown Device";
+    }
+}
+
+/* Enable PCI Bus Mastering for a device */
+void pci_enable_bus_mastering(uint8_t bus, uint8_t device, uint8_t function) {
+    uint16_t command = pci_config_read_word(bus, device, function, 0x04);
+    
+    // Set Bus Master (bit 2) and Memory Space (bit 1) bits
+    command |= (1 << 2) | (1 << 1);
+    
+    // Write back the updated command register
+    pci_config_write_word(bus, device, function, 0x04, command);
+}
+
+/* Find a PCI device with specific class, subclass, and programming interface */
+bool pci_find_device(uint8_t class_code, uint8_t subclass, uint8_t prog_if,
+                    uint8_t* out_bus, uint8_t* out_device, uint8_t* out_function) {
+    for (uint16_t bus = 0; bus < 256; bus++) {
+        for (uint8_t device = 0; device < 32; device++) {
+            for (uint8_t function = 0; function < 8; function++) {
+                uint16_t vendor_id = pci_config_read_word(bus, device, function, 0x00);
+                if (vendor_id == 0xFFFF) continue; // No device
+                
+                uint8_t current_class = pci_config_read_byte(bus, device, function, 0x0B);
+                uint8_t current_subclass = pci_config_read_byte(bus, device, function, 0x0A);
+                uint8_t current_prog_if = pci_config_read_byte(bus, device, function, 0x09);
+                
+                if (current_class == class_code && 
+                    current_subclass == subclass && 
+                    current_prog_if == prog_if) {
+                    *out_bus = bus;
+                    *out_device = device;
+                    *out_function = function;
+                    return true;
                 }
             }
         }
     }
     
-    printf("No AHCI controller found on PCI bus.\n");
-    return 0;
+    return false;
+}
+
+/* Get the size of a PCI Base Address Register (BAR) */
+uint32_t pci_get_bar_size(uint8_t bus, uint8_t device, uint8_t function, uint8_t bar_num) {
+    uint32_t bar_offset = 0x10 + (bar_num * 4);
+    uint32_t old_value, bar_size;
+    
+    // Save the original BAR value
+    old_value = pci_config_read_dword(bus, device, function, bar_offset);
+    
+    // Write all 1's to the BAR
+    pci_config_write_dword(bus, device, function, bar_offset, 0xFFFFFFFF);
+    
+    // Read it back to see what bits are writable
+    bar_size = pci_config_read_dword(bus, device, function, bar_offset);
+    
+    // Restore the original BAR value
+    pci_config_write_dword(bus, device, function, bar_offset, old_value);
+    
+    // If this is an I/O BAR (bit 0 set)
+    if (old_value & 0x1) {
+        // I/O BARs only use the lower 16 bits
+        bar_size &= 0xFFFF;
+    }
+    
+    // Mask out the non-writable bits and BAR type bits
+    bar_size &= ~0xF;
+    
+    // If no writable bits, BAR isn't implemented
+    if (bar_size == 0) {
+        return 0;
+    }
+    
+    // Invert the bits and add 1 to get the size
+    return (~bar_size) + 1;
+}
+
+/* Get the type of a PCI Base Address Register (BAR) */
+enum pci_bar_type pci_get_bar_type(uint8_t bus, uint8_t device, uint8_t function, uint8_t bar_num) {
+    uint32_t bar_offset = 0x10 + (bar_num * 4);
+    uint32_t bar_value = pci_config_read_dword(bus, device, function, bar_offset);
+    
+    // Check bit 0 to determine if this is an I/O or Memory BAR
+    if (bar_value & 0x1) {
+        return PCI_BAR_IO;
+    } else {
+        // Memory BAR - check bits 1-2 to determine type
+        switch ((bar_value >> 1) & 0x3) {
+            case 0x0: return PCI_BAR_MEM32;  // 32-bit Memory BAR
+            case 0x1: return PCI_BAR_MEM16;  // 16-bit Memory BAR (Below 1MB)
+            case 0x2: return PCI_BAR_MEM64;  // 64-bit Memory BAR
+            default: return PCI_BAR_UNKNOWN; // Reserved
+        }
+    }
+}
+
+/* Get the base address of a PCI BAR, masking out the type bits */
+uint64_t pci_get_bar_address(uint8_t bus, uint8_t device, uint8_t function, uint8_t bar_num) {
+    uint32_t bar_offset = 0x10 + (bar_num * 4);
+    uint32_t bar_value = pci_config_read_dword(bus, device, function, bar_offset);
+    enum pci_bar_type type = pci_get_bar_type(bus, device, function, bar_num);
+    
+    // For 64-bit BAR, we need to read the next BAR for the high 32 bits
+    uint64_t addr = 0;
+    
+    switch (type) {
+        case PCI_BAR_IO:
+            // I/O BARs use the lower 16 bits for the address, mask out the lowest bit (type)
+            return (uint64_t)(bar_value & ~0x3);
+            
+        case PCI_BAR_MEM16:
+        case PCI_BAR_MEM32:
+            // 16-bit and 32-bit Memory BARs, mask out the lower 4 bits (type and prefetchable bit)
+            return (uint64_t)(bar_value & ~0xF);
+            
+        case PCI_BAR_MEM64:
+            // 64-bit Memory BAR, need to read high 32 bits from next BAR
+            addr = (uint64_t)(bar_value & ~0xF);
+            bar_offset += 4; // Move to the next BAR
+            bar_value = pci_config_read_dword(bus, device, function, bar_offset);
+            addr |= ((uint64_t)bar_value << 32);
+            return addr;
+            
+        default:
+            return 0;
+    }
+}
+
+/* Initialize the PCI subsystem */
+void init_pci() {
+    printf("Initializing PCI subsystem...\n");
+    // Not much to do for basic PCI initialization
+    // Just scan for devices to check if PCI is functioning properly
+    enumerate_pci_devices();
+    printf("PCI initialization complete.\n");
 }

@@ -1,9 +1,14 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <dirent.h>
 #include <stdbool.h>
-#include <stddef.h>
 #include <stdint.h>
 #include "io.h"
 #include "pci.h"
-#include "stdio.h"
+
+#define PCI_PATH "/sys/bus/pci/devices/"
+#define NVME_CLASS_CODE "010802"
 
 /* PCI configuration space access ports */
 #define PCI_CONFIG_ADDRESS  0xCF8
@@ -525,4 +530,93 @@ void init_pci() {
     // Just scan for devices to check if PCI is functioning properly
     enumerate_pci_devices();
     printf("PCI initialization complete.\n");
+}
+
+/* List NVMe devices using the PCI subsystem */
+void list_nvme_devices() {
+    uint8_t bus, device, function;
+    if (pci_find_device(0x01, 0x08, 0x02, &bus, &device, &function)) {
+        printf("NVMe device found at %02X:%02X.%X\n", bus, device, function);
+        struct pci_device dev = pci_get_device_info(bus, device, function);
+        printf("Vendor ID: %04X, Device ID: %04X, Name: %s\n",
+               dev.vendor_id, dev.device_id, dev.name ? dev.name : "Unknown");
+        // Handle backward compatibility for PCI addresses
+        char pci_address[256];
+        snprintf(pci_address, sizeof(pci_address), "%02X:%02X.%X", bus, device, function);
+        printf("PCI Address: %s\n", pci_address);
+        
+        // Initialize the NVMe device here
+        initialize_nvme_device(bus, device, function);
+    } else {
+        printf("No NVMe devices found.\n");
+    }
+}
+
+/* Initialize NVMe device */
+void initialize_nvme_device(uint8_t bus, uint8_t device, uint8_t function) {
+    printf("Initializing NVMe device at %02X:%02X.%X\n", bus, device, function);
+    
+    // Enable bus mastering
+    pci_enable_bus_mastering(bus, device, function);
+    
+    // Map the BARs
+    uint64_t bar0 = pci_get_bar_address(bus, device, function, 0);
+    uint64_t bar1 = pci_get_bar_address(bus, device, function, 1);
+    
+    printf("BAR0: 0x%016llX\n", bar0);
+    printf("BAR1: 0x%016llX\n", bar1);
+    
+    // NVMe identify command
+    uint32_t* nvme_regs = (uint32_t*)bar0;
+    nvme_regs[0] = 1; // Enable NVMe controller
+    // Additional NVMe initialization steps
+    printf("Sending identify command to NVMe controller...\n");
+    nvme_regs[1] = 0x00000006; // Set opcode for identify command
+    
+    // Wait for completion
+    while (nvme_regs[1] & 0x00000001) {
+        // Spin until command is complete
+    }
+    
+    // Perform read/write test on the first NVMe device found
+    if (pci_find_device(0x01, 0x08, 0x02, &bus, &device, &function)) {
+        nvme_read_write_test(bus, device, function);
+    }
+    printf("NVMe device initialization complete.\n");
+}
+/* Read/Write test file on NVMe device */
+void nvme_read_write_test(uint8_t bus, uint8_t device, uint8_t function) {
+    printf("Performing read/write test on NVMe device at %02X:%02X.%X\n", bus, device, function);
+    
+    uint64_t bar0 = pci_get_bar_address(bus, device, function, 0);
+    if (bar0 == 0) {
+        printf("Failed to map BAR0 for NVMe device.\n");
+        return;
+    }
+
+    uint32_t* nvme_regs = (uint32_t*)bar0;
+    
+    // Write test
+    printf("Writing to NVMe device...\n");
+    nvme_regs[2] = 0xDEADBEEF; // Write a test value
+    printf("Write complete. Value written: 0xDEADBEEF\n");
+    
+    // Read test
+    printf("Reading from NVMe device...\n");
+    uint32_t read_value = nvme_regs[2];
+    printf("Read value: 0x%08X\n", read_value);
+    
+    if (read_value == 0xDEADBEEF) {
+        printf("Read/Write test successful.\n");
+    } else {
+        printf("Read/Write test failed. Expected: 0xDEADBEEF, Got: 0x%08X\n", read_value);
+    }
+}
+int nvme_test() {
+    
+    // List NVMe devices
+    list_nvme_devices();
+    
+    
+    return 0;
 }

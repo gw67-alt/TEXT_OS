@@ -6,6 +6,7 @@
 #include "io.h"
 #include "stdio.h"
 
+
 #define SATA_STATUS_DET_MASK      0x0F  // Device Detection
 #define SATA_STATUS_IPM_MASK      0xF00 // Interface Power Management
 #define SATA_STATUS_DET_PRESENT   0x03  // Device Present and Established Communication

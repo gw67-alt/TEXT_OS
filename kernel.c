@@ -5,8 +5,6 @@
 #include "hardware_specs.h"
 #include "io.h"
 #include "stdio.h"
-#include "sata.h"
-
 
 #define SATA_STATUS_DET_MASK      0x0F  // Device Detection
 #define SATA_STATUS_IPM_MASK      0xF00 // Interface Power Management

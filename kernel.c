@@ -99,7 +99,7 @@ void timer_handler();
 void init_pic();
 void init_pit();
 void init_keyboard();
-void cmd_help();
+void kernel_help();
 void cmd_clear();
 void cmd_hello();
 void process_command();
@@ -816,7 +816,7 @@ int command_length = 0;
 bool command_ready = false;
 
 // Function prototypes for command handlers
-void cmd_help();
+void kernel_help();
 void cmd_clear();
 void cmd_hello();
 void cmd_time(); // New command for displaying time info
@@ -890,7 +890,7 @@ void process_command() {
     
     // Check against known commands
     if (strcmp(command_buffer, "help")) {
-        cmd_help();
+        kernel_help();
     } else if (strcmp(command_buffer, "clear")) {
         cmd_clear();
     } else if (strcmp(command_buffer, "hello")) {
@@ -903,7 +903,7 @@ void process_command() {
 }
 
 /* Command implementations */
-void cmd_help() {
+void kernel_help() {
     printf("Available commands:\n");
     printf("  help  - Show this help message\n");
     printf("  clear - Clear the screen\n");
@@ -932,25 +932,6 @@ void kernel_main() {
     init_rtc();
 	
     enumerate_pci_devices();	
-
-	init_sata_interface();
-    
-    // Get the first active port
-    int active_port = -1;
-    for (int i = 0; i < 32; i++) {
-        if (hba_mem && (hba_mem->pi & (1 << i))) {
-            uint32_t ssts = hba_mem->ports[i].ssts;
-            uint8_t det = (ssts & SATA_STATUS_DET_MASK);
-            uint16_t ipm = (ssts & SATA_STATUS_IPM_MASK) >> 8;
-            
-            if (det == SATA_STATUS_DET_PRESENT && ipm == (SATA_STATUS_IPM_ACTIVE >> 8)) {
-                active_port = i;
-                break;
-            }
-        }
-    }
-
-	nvme_test();
 
 
 	printf("Initialization complete. Start typing commands...\n");

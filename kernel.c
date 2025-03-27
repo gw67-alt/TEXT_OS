@@ -485,9 +485,28 @@ void terminal_scroll() {
     // Make sure to update the clock display after scrolling
     update_clock_display();
 }
+// Simple paging mode variables
+bool vga_pause_enabled = true;       // Global flag to enable/disable pausing
+bool vga_paused = false;             // Flag indicating if output is currently paused
+size_t vga_line_counter = 0;         // Counter for lines printed since last pause
+size_t vga_max_lines = VGA_HEIGHT - 1; // Maximum lines before pausing (leave one line for prompt)
 
-// Now modify the terminal_putchar function to use scrolling
-void terminal_putchar(char c) {
+// Buffer for storing characters during paused state
+#define CHAR_BUFFER_SIZE 16384      // Size of character buffer (adjust as needed)
+char vga_char_buffer[CHAR_BUFFER_SIZE];
+size_t vga_char_buffer_pos = 0;      // Current position in buffer
+size_t vga_char_buffer_count = 0;    // Number of characters in buffer
+
+// Function prototypes
+void vga_check_pause();
+void vga_resume();
+void cmd_toggle_pause(bool enable);
+void vga_putchar_direct(char c);     // Function to output character without pause checks
+void vga_buffer_char(char c);        // Function to store character in buffer during pause
+void vga_process_buffer();           // Function to process buffered characters after resume
+
+// Direct VGA character output - no pause checking
+void vga_putchar_direct(char c) {
     if (c == '\n') {
         // Handle newline character
         terminal_column = 0;
@@ -525,6 +544,147 @@ void terminal_putchar(char c) {
     update_hardware_cursor(terminal_column, terminal_row);
 }
 
+// Buffer a character when in paused state
+void vga_buffer_char(char c) {
+    if (vga_char_buffer_count < CHAR_BUFFER_SIZE) {
+        vga_char_buffer[vga_char_buffer_count++] = c;
+    }
+}
+
+// Process characters from the buffer after resuming
+void vga_process_buffer() {
+    // Process a screen's worth of characters from the buffer
+    size_t chars_processed = 0;
+    size_t lines_processed = 0;
+    
+    while (chars_processed < vga_char_buffer_count && lines_processed < vga_max_lines) {
+        char c = vga_char_buffer[chars_processed++];
+        
+        // Output the character directly
+        vga_putchar_direct(c);
+        
+        // Count newlines for pause tracking
+        if (c == '\n') {
+            lines_processed++;
+        }
+    }
+    
+    // If there are more characters to process, keep them in the buffer
+    if (chars_processed < vga_char_buffer_count) {
+        // Move remaining characters to the beginning of the buffer
+        for (size_t i = 0; i < vga_char_buffer_count - chars_processed; i++) {
+            vga_char_buffer[i] = vga_char_buffer[chars_processed + i];
+        }
+        vga_char_buffer_count -= chars_processed;
+        
+        // We still have more to display, so check for pause again
+        vga_check_pause();
+    } else {
+        // All characters processed, clear buffer
+        vga_char_buffer_count = 0;
+    }
+}
+
+// Modified terminal_putchar to include pause functionality
+void terminal_putchar(char c) {
+    // If already paused, buffer the character instead of displaying it
+    if (vga_paused) {
+        vga_buffer_char(c);
+        return;
+    }
+
+    // Output the character directly
+    vga_putchar_direct(c);
+    
+    // Track newlines for pause functionality
+    if (c == '\n') {
+        vga_line_counter++;
+        
+        // Check if we need to pause output
+        if (vga_pause_enabled && vga_line_counter >= vga_max_lines) {
+            vga_check_pause();
+        }
+    }
+}
+
+// Function to check if we need to pause output
+void vga_check_pause() {
+    if (!vga_pause_enabled) return;
+    
+    // Save current cursor position and color
+    size_t saved_row = terminal_row;
+    size_t saved_column = terminal_column;
+    uint8_t saved_color = terminal_color;
+    
+    // Display pause prompt at the bottom line
+    terminal_row = VGA_HEIGHT - 1;
+    terminal_column = 0;
+    
+    // Clear the line
+    terminal_setcolor(make_color(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY));
+    for (size_t x = 0; x < VGA_WIDTH; x++) {
+        terminal_putentryat(' ', terminal_color, x, terminal_row);
+    }
+    
+    // Display the prompt
+    terminal_row = VGA_HEIGHT - 1;
+    terminal_column = 0;
+    
+    // Use direct output to avoid recursion
+    const char* prompt = "--More-- (Press ENTER to continue, 'q' to quit)";
+    for (size_t i = 0; prompt[i] != '\0'; i++) {
+        terminal_putentryat(prompt[i], terminal_color, terminal_column++, terminal_row);
+    }
+    
+    // Set paused state
+    vga_paused = true;
+    
+    // Restore cursor position and color
+    terminal_row = saved_row;
+    terminal_column = saved_column;
+    terminal_setcolor(saved_color);
+    update_hardware_cursor(terminal_column, terminal_row);
+}
+
+// Function to resume output after pausing
+void vga_resume() {
+    // Clear the pause indicator
+    terminal_row = VGA_HEIGHT - 1;
+    terminal_column = 0;
+    uint8_t saved_color = terminal_color;
+    terminal_setcolor(make_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
+    
+    for (size_t x = 0; x < VGA_WIDTH; x++) {
+        terminal_putentryat(' ', terminal_color, x, terminal_row);
+    }
+    
+    terminal_setcolor(saved_color);
+    
+    // Reset the line counter
+    vga_line_counter = 0;
+    
+    // Clear paused state
+    vga_paused = false;
+    
+    // Process any buffered characters
+    if (vga_char_buffer_count > 0) {
+        vga_process_buffer();
+    }
+}
+
+// Toggle the pause functionality
+void cmd_toggle_pause(bool enable) {
+    vga_pause_enabled = enable;
+    
+    // Use direct character output to avoid pause checks
+    const char* msg = enable ? 
+        "VGA pause functionality is now ENABLED\n" : 
+        "VGA pause functionality is now DISABLED\n";
+    
+    for (size_t i = 0; msg[i] != '\0'; i++) {
+        vga_putchar_direct(msg[i]);
+    }
+}
 void update_cursor_state() {
     cursor_blink_counter++;
     if (cursor_blink_counter >= 25) {  // Adjust this value to control blink speed
@@ -820,8 +980,7 @@ void cmd_clear();
 void cmd_hello();
 void cmd_time(); // New command for displaying time info
 void process_command();
-
-/* Keyboard handler with integrated command processing */
+// Update the keyboard handler to handle pause mode
 void keyboard_handler() {
     /* Read scancode from keyboard data port */
     uint8_t scancode = inb(0x60);
@@ -843,7 +1002,35 @@ void keyboard_handler() {
         return;
     }
 
-    /* Normal input handling */
+    /* If in paused state, check for Enter key or 'q' key */
+    if (vga_paused) {
+        /* Check for Enter key (scancode 0x1C) to resume output */
+        if (scancode == 0x1C) {
+            vga_resume();
+        }
+        /* Check for 'q' key (scancode 0x10) to quit output and return to prompt */
+        else if (scancode == 0x10) {
+            // Clear the buffer when quitting
+            vga_char_buffer_count = 0;
+            vga_paused = false;
+            
+            // Return to command prompt
+            vga_putchar_direct('\n');
+            const char* prompt = "> ";
+            for (size_t i = 0; prompt[i] != '\0'; i++) {
+                vga_putchar_direct(prompt[i]);
+            }
+            
+            // Reset command buffer
+            command_length = 0;
+        }
+        
+        /* Send EOI to PIC */
+        outb(0x20, 0x20);
+        return;
+    }
+
+    /* Normal input handling (when not paused) */
     char key = scancode_to_ascii[scancode];
     if (key != 0) {
         if (key == '\n') {
@@ -856,7 +1043,8 @@ void keyboard_handler() {
             
             // Reset for next command
             command_length = 0;
-            printf("> ");
+            terminal_putchar('>');
+            terminal_putchar(' ');
         } else if (key == '\b') {
             // Backspace - delete last character
             if (command_length > 0) {
@@ -876,7 +1064,6 @@ void keyboard_handler() {
     /* Send EOI to PIC */
     outb(0x20, 0x20);
 }
-
 /* Process the command in the buffer */
 void process_command() {
     // Skip processing if buffer is empty
@@ -913,8 +1100,10 @@ void cmd_clear() {
     clear_screen();
 }
 
+
 void cmd_hello() {
     printf("Hello, user!\n");
+
 }
 
 /* Modified kernel_main function */

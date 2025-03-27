@@ -930,13 +930,8 @@ void kernel_main() {
     /* Initialize the real-time clock */
     init_rtc();
 	
-    // Initialize PCI subsystem
-    init_pci();
-    
     // List NVMe devices
-    nvme_test();
-    
-
+    list_nvme_devices();
 
 	printf("Initialization complete. Start typing commands...\n");
 

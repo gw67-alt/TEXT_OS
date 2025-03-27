@@ -1,1 +1,1 @@
-I suspect we need to autolocate the NVMe PCI address then remove some of the headers, one by one; then replace default code with custom code in hardware retrospect with definition compatibility in mind.
+

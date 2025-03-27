@@ -183,6 +183,57 @@ void list_nvme_devices() {
                     
                     // Initialize this NVMe device
                     initialize_nvme_device(bus, device, function);
+
+                    printf("Found NVMe device at %02X:%02X.%X\n", bus, device, function);
+    
+                    /* State variables for NVMe controller and queues */
+                    volatile uint32_t *reg_base;
+                    void *admin_sq_buffer;
+                    uint32_t admin_sq_size;
+                    uint32_t admin_sq_tail;
+                    uint32_t admin_sq_head;
+                    volatile uint32_t *admin_sq_doorbell;
+                    void *admin_cq_buffer;
+                    uint32_t admin_cq_size;
+                    uint32_t admin_cq_head;
+                    uint32_t admin_cq_phase;
+                    volatile uint32_t *admin_cq_doorbell;
+                    uint32_t db_stride;
+                    uint16_t next_cmd_id;
+                  
+                    
+                    /* Setup I/O queues */
+                    int ret = nvme_setup_io_queues_nostruct(
+                        reg_base,
+                        admin_sq_buffer,
+                        admin_sq_size,
+                        &admin_sq_tail,
+                        &admin_sq_head,
+                        admin_sq_doorbell,
+                        admin_cq_buffer,
+                        admin_cq_size,
+                        &admin_cq_head,
+                        &admin_cq_phase,
+                        admin_cq_doorbell,
+                        db_stride,
+                        &next_cmd_id,
+                        8 /* Number of I/O queues */
+                    );
+                    
+                    if (ret) {
+                        printf("Error: Failed to setup I/O queues\n");
+                        /* Cleanup admin queues */
+                        free(admin_sq_buffer);
+                        free(admin_cq_buffer);
+                        return ret;
+                    }
+                    
+                    printf("NVMe initialization complete\n");
+                    
+                    /* Cleanup */
+                    free(admin_sq_buffer);
+                    free(admin_cq_buffer);
+                    
                 }
             }
         }
@@ -2490,95 +2541,6 @@ int nvme_setup_io_queues_nostruct(
         printf("Error: Failed to create I/O queues\n");
         return ret;
     }
-    
-    return 0;
-}
-
-/**
- * Main function for NVMe testing without structs
- */
-int nvme_test(void) {
-    int ret;
-    uint8_t bus, device, function;
-    
-    /* Find NVMe device */
-    printf("Searching for NVMe devices...\n");
-    if (!pcie_find_device(0x01, 0x08, 0x02, &bus, &device, &function)) {
-        printf("Error: No NVMe device found\n");
-        return -1;
-    }
-    
-    printf("Found NVMe device at %02X:%02X.%X\n", bus, device, function);
-    
-    /* State variables for NVMe controller and queues */
-    volatile uint32_t *reg_base;
-    void *admin_sq_buffer;
-    uint32_t admin_sq_size;
-    uint32_t admin_sq_tail;
-    uint32_t admin_sq_head;
-    volatile uint32_t *admin_sq_doorbell;
-    void *admin_cq_buffer;
-    uint32_t admin_cq_size;
-    uint32_t admin_cq_head;
-    uint32_t admin_cq_phase;
-    volatile uint32_t *admin_cq_doorbell;
-    uint32_t db_stride;
-    uint16_t next_cmd_id;
-    
-    /* Initialize NVMe device */
-    ret = nvme_init_device_nostruct(
-        bus, device, function,
-        &reg_base,
-        &admin_sq_buffer,
-        &admin_sq_size,
-        &admin_sq_tail,
-        &admin_sq_head,
-        &admin_sq_doorbell,
-        &admin_cq_buffer,
-        &admin_cq_size,
-        &admin_cq_head,
-        &admin_cq_phase,
-        &admin_cq_doorbell,
-        &db_stride,
-        &next_cmd_id
-    );
-    
-    if (ret) {
-        printf("Error: Failed to initialize NVMe device\n");
-        return ret;
-    }
-    
-    /* Setup I/O queues */
-    ret = nvme_setup_io_queues_nostruct(
-        reg_base,
-        admin_sq_buffer,
-        admin_sq_size,
-        &admin_sq_tail,
-        &admin_sq_head,
-        admin_sq_doorbell,
-        admin_cq_buffer,
-        admin_cq_size,
-        &admin_cq_head,
-        &admin_cq_phase,
-        admin_cq_doorbell,
-        db_stride,
-        &next_cmd_id,
-        8 /* Number of I/O queues */
-    );
-    
-    if (ret) {
-        printf("Error: Failed to setup I/O queues\n");
-        /* Cleanup admin queues */
-        free(admin_sq_buffer);
-        free(admin_cq_buffer);
-        return ret;
-    }
-    
-    printf("NVMe initialization complete\n");
-    
-    /* Cleanup */
-    free(admin_sq_buffer);
-    free(admin_cq_buffer);
     
     return 0;
 }

@@ -7,6 +7,8 @@
 #include "io.h"
 #include "pcie.h"
 
+
+#include <unistd.h>
 #define NVME_CLASS_CODE "010802"
 
 /* Enhanced Configuration Access Mechanism (ECAM) for PCIe */
@@ -929,4 +931,1654 @@ uint64_t pcie_get_bar_address(uint8_t bus, uint8_t device, uint8_t function, uin
         default:
             return 0;
     }
+}
+
+
+
+
+
+/* NVMe command status codes */
+#define NVME_SC_SUCCESS 0x0
+
+/* Define ETIMEDOUT if not already defined */
+#ifndef ETIMEDOUT
+#define ETIMEDOUT 110  /* Standard timeout error code */
+#endif
+
+/**
+ * Poll NVMe completion queue for command completion without using structs
+ *
+ * @param cq_buffer         Pointer to completion queue memory
+ * @param cq_size           Size of the completion queue (entries)
+ * @param cq_head_ptr       Pointer to completion queue head index (will be updated)
+ * @param cq_phase_ptr      Pointer to completion queue phase tag (will be updated)
+ * @param cq_doorbell       Pointer to completion queue doorbell register
+ * @param cmd_id            Command ID to wait for
+ * @param timeout_ms        Timeout in milliseconds
+ * @param sq_head_ptr       Pointer to submission queue head index (will be updated)
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_poll_completion_nostruct(
+    void *cq_buffer,
+    uint32_t cq_size,
+    uint32_t *cq_head_ptr,
+    uint32_t *cq_phase_ptr,
+    uint32_t *cq_doorbell,
+    uint16_t cmd_id,
+    uint32_t timeout_ms,
+    uint32_t *sq_head_ptr)
+{
+    uint32_t cq_head = *cq_head_ptr;
+    uint32_t cq_phase = *cq_phase_ptr;
+    uint32_t elapsed = 0;
+    const uint32_t poll_interval_us = 100;
+    
+    /* Completion queue entry fields offsets */
+    const int CQE_RESULT_OFFSET = 0;       /* 4 bytes */
+    const int CQE_RESERVED_OFFSET = 4;     /* 4 bytes */
+    const int CQE_SQ_HEAD_OFFSET = 8;      /* 2 bytes */
+    const int CQE_SQ_ID_OFFSET = 10;       /* 2 bytes */
+    const int CQE_COMMAND_ID_OFFSET = 12;  /* 2 bytes */
+    const int CQE_STATUS_OFFSET = 14;      /* 2 bytes */
+    const int CQE_SIZE = 16;               /* Total size in bytes */
+    
+    printf("Polling completion queue: Head=%u, Phase=%u, CMD_ID=%u\n", 
+           cq_head, cq_phase, cmd_id);
+    
+    /* Poll completion queue until command completes or timeout */
+    while (elapsed < timeout_ms * 1000) {
+        /* Check all completion entries between head and tail */
+        uint16_t current_index = cq_head;
+        
+        while (1) {
+            /* Calculate pointer to the current completion queue entry */
+            uint8_t *cq_entry = (uint8_t *)cq_buffer + (current_index * CQE_SIZE);
+            
+            /* Extract status field (2 bytes) */
+            uint16_t status = *(uint16_t *)(cq_entry + CQE_STATUS_OFFSET);
+            
+            /* Check phase bit to see if entry is valid */
+            if ((status & 0x1) == cq_phase) {
+                /* Extract command ID (2 bytes) */
+                uint16_t entry_cmd_id = *(uint16_t *)(cq_entry + CQE_COMMAND_ID_OFFSET);
+                
+                /* Entry is valid, check if it's for our command */
+                if (entry_cmd_id == cmd_id) {
+                    /* Extract status code */
+                    uint16_t status_code = (status >> 1) & 0xFF;
+                    uint16_t status_type = (status >> 9) & 0x7;
+                    
+                    /* Extract SQ head pointer (2 bytes) */
+                    uint16_t sq_head = *(uint16_t *)(cq_entry + CQE_SQ_HEAD_OFFSET);
+                    *sq_head_ptr = sq_head;
+                    
+                    /* Update completion queue head */
+                    *cq_head_ptr = (current_index + 1) % cq_size;
+                    
+                    /* Check if we wrapped around */
+                    if (*cq_head_ptr == 0) {
+                        *cq_phase_ptr = !cq_phase;
+                    }
+                    
+                    /* Ring the completion queue doorbell */
+                    *cq_doorbell = *cq_head_ptr;
+                    
+                    if (status_code == NVME_SC_SUCCESS) {
+                        printf("Command %u completed successfully\n", cmd_id);
+                        return 0; /* Success */
+                    } else {
+                        printf("Error: Command %u failed with status type %u, code 0x%X\n", 
+                               cmd_id, status_type, status_code);
+                        return -status_code;
+                    }
+                }
+                
+                /* Move to next entry */
+                current_index = (current_index + 1) % cq_size;
+                
+                /* If we've wrapped around to head, we've checked all valid entries */
+                if (current_index == cq_head) {
+                    break;
+                }
+            } else {
+                /* No more valid entries */
+                break;
+            }
+        }
+        
+        /* Sleep for a short time before polling again */
+        usleep(poll_interval_us);
+        elapsed += poll_interval_us;
+    }
+    
+    printf("Error: Timeout waiting for completion of command %u\n", cmd_id);
+    return -ETIMEDOUT;
+}
+
+
+/* NVMe Opcodes */
+#define NVME_CMD_WRITE 0x01
+
+/* NVMe Submission Queue Entry offsets within a 64-byte entry */
+#define SQE_OPCODE_OFFSET     0   /* 1 byte */
+#define SQE_FLAGS_OFFSET      1   /* 1 byte */
+#define SQE_COMMAND_ID_OFFSET 2   /* 2 bytes */
+#define SQE_NSID_OFFSET       4   /* 4 bytes */
+#define SQE_RESERVED1_OFFSET  8   /* 8 bytes */
+#define SQE_METADATA_OFFSET  16   /* 8 bytes */
+#define SQE_PRP1_OFFSET      24   /* 8 bytes */
+#define SQE_PRP2_OFFSET      32   /* 8 bytes */
+#define SQE_SLBA_OFFSET      40   /* 8 bytes */
+#define SQE_NLB_OFFSET       48   /* 4 bytes */
+#define SQE_CONTROL_OFFSET   52   /* 2 bytes */
+#define SQE_DSMGMT_OFFSET    54   /* 2 bytes */
+#define SQE_REFTAG_OFFSET    56   /* 4 bytes */
+#define SQE_APPTAG_OFFSET    60   /* 2 bytes */
+#define SQE_APPMASK_OFFSET   62   /* 2 bytes */
+#define SQE_SIZE             64   /* Total size in bytes */
+
+/**
+ * Submit a write command to NVMe device without using structs
+ *
+ * @param sq_buffer     Pointer to submission queue memory
+ * @param sq_size       Size of the submission queue (entries)
+ * @param sq_tail_ptr   Pointer to submission queue tail index (will be updated)
+ * @param sq_head       Current head position of submission queue
+ * @param sq_doorbell   Pointer to submission queue doorbell register
+ * @param nsid          Namespace ID
+ * @param lba           Starting Logical Block Address
+ * @param num_blocks    Number of blocks to write
+ * @param data          Pointer to data buffer
+ * @param data_len      Length of data buffer in bytes
+ * @param next_cmd_id   Next command ID to use
+ * @param cmd_id_ptr    Pointer to store assigned command ID
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_submit_write_nostruct(
+    void *sq_buffer,
+    uint32_t sq_size,
+    uint32_t *sq_tail_ptr,
+    uint32_t sq_head,
+    uint32_t *sq_doorbell,
+    uint32_t nsid,
+    uint64_t lba,
+    uint32_t num_blocks,
+    void *data,
+    uint32_t data_len,
+    uint16_t next_cmd_id,
+    uint16_t *cmd_id_ptr)
+{
+    uint32_t sq_tail = *sq_tail_ptr;
+    
+    /* Check if there's space in the submission queue */
+    uint32_t next_tail = (sq_tail + 1) % sq_size;
+    if (next_tail == sq_head) {
+        printf("Error: Submission queue is full\n");
+        return -1;
+    }
+    
+    /* Calculate pointer to the next available submission queue entry */
+    uint8_t *sq_entry = (uint8_t *)sq_buffer + (sq_tail * SQE_SIZE);
+    
+    /* Clear the entire entry */
+    memset(sq_entry, 0, SQE_SIZE);
+    
+    /* Assign a command ID and store it for the caller */
+    uint16_t cmd_id = next_cmd_id;
+    *cmd_id_ptr = cmd_id;
+    
+    /* Log the write operation details */
+    printf("Submitting write command: LBA=0x%lx, Blocks=%u, Data=%p, CMD_ID=%u\n",
+           lba, num_blocks, data, cmd_id);
+    
+    /* Fill in the command fields */
+    sq_entry[SQE_OPCODE_OFFSET] = NVME_CMD_WRITE;          /* Opcode: Write */
+    sq_entry[SQE_FLAGS_OFFSET] = 0;                        /* Flags */
+    *(uint16_t *)(sq_entry + SQE_COMMAND_ID_OFFSET) = cmd_id; /* Command ID */
+    *(uint32_t *)(sq_entry + SQE_NSID_OFFSET) = nsid;      /* Namespace ID */
+    
+    /* Set up Physical Region Page (PRP) entries for data buffer */
+    *(uint64_t *)(sq_entry + SQE_PRP1_OFFSET) = (uint64_t)data;   /* PRP1: First 4K */
+    
+    /* If data spans multiple pages, set up PRP2 */
+    uint32_t page_size = 4096;
+    if (data_len > page_size) {
+        /* If data is between 4K and 8K, PRP2 points to second 4K chunk */
+        if (data_len <= 2 * page_size) {
+            *(uint64_t *)(sq_entry + SQE_PRP2_OFFSET) = (uint64_t)data + page_size;
+        } else {
+            /* For transfers > 8K, we need a PRP list, but this is simplified */
+            printf("Warning: Large transfers (>8KB) not fully implemented\n");
+            *(uint64_t *)(sq_entry + SQE_PRP2_OFFSET) = (uint64_t)data + page_size;
+        }
+    }
+    
+    /* Set LBA (Logical Block Address) */
+    *(uint64_t *)(sq_entry + SQE_SLBA_OFFSET) = lba;
+    
+    /* Set Number of Logical Blocks (0-based value) */
+    *(uint32_t *)(sq_entry + SQE_NLB_OFFSET) = num_blocks - 1;
+    
+    /* Update submission queue tail pointer */
+    *sq_tail_ptr = next_tail;
+    
+    /* Ring the submission queue doorbell to submit the command */
+    printf("Ringing submission queue doorbell: Tail=%u\n", *sq_tail_ptr);
+    *sq_doorbell = *sq_tail_ptr;
+    
+    return 0;
+}
+
+/**
+ * Write data to NVMe device at specified LBA without using structs
+ * This function combines submission and completion polling
+ *
+ * @param sq_buffer     Pointer to submission queue memory
+ * @param sq_size       Size of the submission queue (entries)
+ * @param sq_tail_ptr   Pointer to submission queue tail index
+ * @param sq_head_ptr   Pointer to submission queue head index
+ * @param sq_doorbell   Pointer to submission queue doorbell register
+ * @param cq_buffer     Pointer to completion queue memory
+ * @param cq_size       Size of the completion queue (entries)
+ * @param cq_head_ptr   Pointer to completion queue head index
+ * @param cq_phase_ptr  Pointer to completion queue phase tag
+ * @param cq_doorbell   Pointer to completion queue doorbell register
+ * @param nsid          Namespace ID
+ * @param lba           Starting Logical Block Address
+ * @param num_blocks    Number of blocks to write
+ * @param data          Pointer to data buffer
+ * @param next_cmd_id   Next command ID to use
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_write_blocks_nostruct(
+    void *sq_buffer,
+    uint32_t sq_size,
+    uint32_t *sq_tail_ptr,
+    uint32_t *sq_head_ptr,
+    uint32_t *sq_doorbell,
+    void *cq_buffer,
+    uint32_t cq_size,
+    uint32_t *cq_head_ptr,
+    uint32_t *cq_phase_ptr,
+    uint32_t *cq_doorbell,
+    uint32_t nsid,
+    uint64_t lba,
+    uint32_t num_blocks,
+    void *data,
+    uint16_t next_cmd_id)
+{
+    int ret;
+    uint16_t cmd_id;
+    uint32_t data_len = num_blocks * 512; /* Assuming 512-byte sectors */
+    
+    /* Submit write command */
+    ret = nvme_submit_write_nostruct(
+        sq_buffer,
+        sq_size,
+        sq_tail_ptr,
+        *sq_head_ptr,
+        sq_doorbell,
+        nsid,
+        lba,
+        num_blocks,
+        data,
+        data_len,
+        next_cmd_id,
+        &cmd_id
+    );
+    
+    if (ret) {
+        printf("Error: Failed to submit write command\n");
+        return ret;
+    }
+    
+    
+    
+    /* Wait for completion */
+    ret = nvme_poll_completion_nostruct(
+        cq_buffer,
+        cq_size,
+        cq_head_ptr,
+        cq_phase_ptr,
+        cq_doorbell,
+        cmd_id,
+        5000, /* 5 second timeout */
+        sq_head_ptr
+    );
+    
+    if (ret) {
+        printf("Error: Write command failed\n");
+        return ret;
+    }
+    
+    return 0;
+}
+
+/**
+ * Example usage function demonstrating how to use the no-struct write functions
+ */
+int example_usage(void) {
+    /* Allocate queues (simplified example) */
+    void *sq_buffer = aligned_alloc(4096, 1024 * 64);  /* 1024 entries, 64 bytes each */
+    void *cq_buffer = aligned_alloc(4096, 1024 * 16);  /* 1024 entries, 16 bytes each */
+    
+    if (!sq_buffer || !cq_buffer) {
+        if (sq_buffer) free(sq_buffer);
+        if (cq_buffer) free(cq_buffer);
+        return -1;
+    }
+    
+    /* Clear queue memory */
+    memset(sq_buffer, 0, 1024 * 64);
+    memset(cq_buffer, 0, 1024 * 16);
+    
+    /* Initialize tracking variables */
+    uint32_t sq_tail = 0;
+    uint32_t sq_head = 0;
+    uint32_t cq_head = 0;
+    uint32_t cq_phase = 1;
+    
+    /* These would be memory-mapped registers in real hardware */
+    uint32_t sq_doorbell_value = 0;
+    uint32_t cq_doorbell_value = 0;
+    uint32_t *sq_doorbell = &sq_doorbell_value;
+    uint32_t *cq_doorbell = &cq_doorbell_value;
+    
+    /* Allocate a data buffer for writing */
+    void *data_buffer = aligned_alloc(4096, 4096);
+    if (!data_buffer) {
+        free(sq_buffer);
+        free(cq_buffer);
+        return -1;
+    }
+    
+    /* Fill buffer with test pattern */
+    for (int i = 0; i < 4096; i++) {
+        ((uint8_t *)data_buffer)[i] = i & 0xFF;
+    }
+    
+    /* Write data (this is just an example, not a real call in context) */
+    int result = nvme_write_blocks_nostruct(
+        sq_buffer,      /* SQ buffer */
+        1024,           /* SQ size */
+        &sq_tail,       /* SQ tail */
+        &sq_head,       /* SQ head */
+        sq_doorbell,    /* SQ doorbell */
+        cq_buffer,      /* CQ buffer */
+        1024,           /* CQ size */
+        &cq_head,       /* CQ head */
+        &cq_phase,      /* CQ phase */
+        cq_doorbell,    /* CQ doorbell */
+        1,              /* Namespace ID */
+        0,              /* LBA */
+        8,              /* Number of blocks (4KB) */
+        data_buffer,    /* Data buffer */
+        0               /* First command ID */
+    );
+    
+    /* Clean up */
+    free(data_buffer);
+    free(sq_buffer);
+    free(cq_buffer);
+    
+    return result;
+}
+
+
+
+/* NVMe Admin command opcodes */
+#define NVME_ADMIN_CMD_CREATE_CQ    0x05
+#define NVME_ADMIN_CMD_CREATE_SQ    0x01
+#define NVME_ADMIN_CMD_IDENTIFY     0x06
+
+/* NVMe Doorbell Register Offsets */
+#define NVME_REG_CAP_LO       0x00  /* Controller Capabilities Lower Dword */
+#define NVME_REG_CAP_HI       0x04  /* Controller Capabilities Higher Dword */
+#define NVME_REG_VS           0x08  /* Version */
+#define NVME_REG_CC           0x14  /* Controller Configuration */
+#define NVME_REG_CSTS         0x1C  /* Controller Status */
+#define NVME_REG_AQA          0x24  /* Admin Queue Attributes */
+#define NVME_REG_ASQ          0x28  /* Admin Submission Queue Base Address */
+#define NVME_REG_ACQ          0x30  /* Admin Completion Queue Base Address */
+#define NVME_REG_SQ0TDBL      0x1000 /* Submission Queue 0 Tail Doorbell */
+#define NVME_REG_CQ0HDBL      0x1004 /* Completion Queue 0 Head Doorbell */
+
+/**
+ * Initialize NVMe admin queue without using structs
+ *
+ * @param reg_base        Base address of NVMe controller registers
+ * @param admin_sq_buffer Pointer to admin submission queue memory
+ * @param admin_sq_size   Size of admin submission queue (entries)
+ * @param admin_cq_buffer Pointer to admin completion queue memory
+ * @param admin_cq_size   Size of admin completion queue (entries)
+ * @param db_stride       Doorbell stride from NVMe capabilities
+ * @param sq_tail_ptr     Pointer to store submission queue tail index
+ * @param sq_head_ptr     Pointer to store submission queue head index
+ * @param cq_head_ptr     Pointer to store completion queue head index
+ * @param cq_phase_ptr    Pointer to store completion queue phase bit
+ * @param sq_doorbell_ptr Pointer to store SQ doorbell register address
+ * @param cq_doorbell_ptr Pointer to store CQ doorbell register address
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_init_admin_queue_nostruct(
+    volatile uint32_t *reg_base,
+    void *admin_sq_buffer,
+    uint32_t admin_sq_size,
+    void *admin_cq_buffer,
+    uint32_t admin_cq_size,
+    uint32_t db_stride,
+    uint32_t *sq_tail_ptr,
+    uint32_t *sq_head_ptr,
+    uint32_t *cq_head_ptr,
+    uint32_t *cq_phase_ptr,
+    volatile uint32_t **sq_doorbell_ptr,
+    volatile uint32_t **cq_doorbell_ptr)
+{
+    /* Initialize indices and phase bit */
+    *sq_tail_ptr = 0;
+    *sq_head_ptr = 0;
+    *cq_head_ptr = 0;
+    *cq_phase_ptr = 1;
+    
+    /* Clear queue memory */
+    memset(admin_sq_buffer, 0, admin_sq_size * 64);  /* 64 bytes per entry */
+    memset(admin_cq_buffer, 0, admin_cq_size * 16);  /* 16 bytes per entry */
+    
+    /* Set up Admin Queue Attributes register */
+    uint32_t aqa = ((admin_cq_size - 1) << 16) | (admin_sq_size - 1);
+    reg_base[NVME_REG_AQA/4] = aqa;
+    
+    /* Set Admin Submission Queue Base Address */
+    uint64_t admin_sq_addr = (uint64_t)admin_sq_buffer;
+    reg_base[NVME_REG_ASQ/4] = (uint32_t)admin_sq_addr;
+    reg_base[(NVME_REG_ASQ/4) + 1] = (uint32_t)(admin_sq_addr >> 32);
+    
+    /* Set Admin Completion Queue Base Address */
+    uint64_t admin_cq_addr = (uint64_t)admin_cq_buffer;
+    reg_base[NVME_REG_ACQ/4] = (uint32_t)admin_cq_addr;
+    reg_base[(NVME_REG_ACQ/4) + 1] = (uint32_t)(admin_cq_addr >> 32);
+    
+    /* Calculate doorbell register addresses */
+    *sq_doorbell_ptr = &reg_base[NVME_REG_SQ0TDBL/4];
+    *cq_doorbell_ptr = &reg_base[NVME_REG_CQ0HDBL/4];
+    
+    return 0;
+}
+
+/**
+ * Reset and enable NVMe controller without using structs
+ *
+ * @param reg_base      Base address of NVMe controller registers
+ * @param timeout_ms    Timeout in milliseconds
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_reset_and_enable_controller_nostruct(
+    volatile uint32_t *reg_base,
+    uint32_t timeout_ms)
+{
+    uint32_t elapsed = 0;
+    const uint32_t poll_interval_us = 100;
+    
+    /* Read controller capabilities */
+    uint32_t cap_lo = reg_base[NVME_REG_CAP_LO/4];
+    uint32_t cap_hi = reg_base[NVME_REG_CAP_HI/4];
+    uint64_t cap = ((uint64_t)cap_hi << 32) | cap_lo;
+    
+    /* Extract important capabilities */
+    uint32_t timeout = (cap >> 24) & 0xFF;
+    uint32_t db_stride = (cap >> 32) & 0xF;
+    uint32_t mqes = cap & 0xFFFF;
+    
+    printf("NVMe Controller Capabilities: 0x%016lx\n", cap);
+    printf("  Max Queue Entries: %u\n", mqes + 1);
+    printf("  Doorbell Stride: %u\n", db_stride);
+    printf("  Timeout: %u sec\n", timeout);
+    
+    /* Read version register */
+    uint32_t version = reg_base[NVME_REG_VS/4];
+    printf("NVMe Version: %d.%d.%d\n", 
+           (version >> 16) & 0xFFFF, (version >> 8) & 0xFF, version & 0xFF);
+    
+    /* Reset the controller - disable it first */
+    uint32_t cc = reg_base[NVME_REG_CC/4];
+    cc &= ~0x1;  /* Clear Enable bit */
+    reg_base[NVME_REG_CC/4] = cc;
+    
+    /* Wait for CSTS.RDY to become 0 */
+    elapsed = 0;
+    while (elapsed < timeout_ms * 1000) {
+        uint32_t csts = reg_base[NVME_REG_CSTS/4];
+        if ((csts & 0x1) == 0) {
+            break;
+        }
+        usleep(poll_interval_us);
+        elapsed += poll_interval_us;
+    }
+    
+    /* Check for timeout */
+    if (elapsed >= timeout_ms * 1000) {
+        printf("Error: Timeout waiting for controller to reset\n");
+        return -1;
+    }
+    
+    printf("NVMe controller reset complete.\n");
+    
+    /* Configure the controller */
+    cc = 0;
+    cc |= (0 << 4);    /* I/O Command Set Selected: NVM Command Set */
+    cc |= (4 << 7);    /* I/O Completion Queue Entry Size: 16 bytes (2^4) */
+    cc |= (6 << 11);   /* I/O Submission Queue Entry Size: 64 bytes (2^6) */
+    cc |= (0 << 14);   /* Memory Page Size: 4KB (2^12 bytes) -> (0 = 2^12) */
+    cc |= (0 << 16);   /* Arbitration Mechanism: Round Robin */
+    cc |= (1 << 20);   /* Enable Submission Queue in memory */
+    cc |= (1 << 1);    /* Enable interrupts */
+    
+    /* Write the configuration */
+    reg_base[NVME_REG_CC/4] = cc;
+    
+    /* Enable the controller */
+    cc |= 0x1;  /* Set Enable bit */
+    reg_base[NVME_REG_CC/4] = cc;
+    
+    /* Wait for CSTS.RDY to become 1 */
+    elapsed = 0;
+    while (elapsed < timeout_ms * 1000) {
+        uint32_t csts = reg_base[NVME_REG_CSTS/4];
+        if ((csts & 0x1) != 0) {
+            break;
+        }
+        usleep(poll_interval_us);
+        elapsed += poll_interval_us;
+    }
+    
+    /* Check for timeout */
+    if (elapsed >= timeout_ms * 1000) {
+        printf("Error: Timeout waiting for controller to enable\n");
+        return -1;
+    }
+    
+    printf("NVMe controller enabled successfully.\n");
+    return 0;
+}
+
+
+
+
+/* NVMe Admin Command Opcodes */
+#define NVME_ADMIN_CMD_IDENTIFY   0x06
+#define NVME_ADMIN_CMD_CREATE_CQ  0x05
+#define NVME_ADMIN_CMD_CREATE_SQ  0x01
+
+/* NVMe Submission Queue Entry offsets within a 64-byte entry */
+#define SQE_OPCODE_OFFSET     0   /* 1 byte */
+#define SQE_FLAGS_OFFSET      1   /* 1 byte */
+#define SQE_COMMAND_ID_OFFSET 2   /* 2 bytes */
+#define SQE_NSID_OFFSET       4   /* 4 bytes */
+#define SQE_RESERVED1_OFFSET  8   /* 8 bytes */
+#define SQE_METADATA_OFFSET  16   /* 8 bytes */
+#define SQE_PRP1_OFFSET      24   /* 8 bytes */
+#define SQE_PRP2_OFFSET      32   /* 8 bytes */
+#define SQE_CDW10_OFFSET     40   /* 4 bytes - Command Dword 10 */
+#define SQE_CDW11_OFFSET     44   /* 4 bytes - Command Dword 11 */
+#define SQE_CDW12_OFFSET     48   /* 4 bytes - Command Dword 12 */
+#define SQE_CDW13_OFFSET     52   /* 4 bytes - Command Dword 13 */
+#define SQE_CDW14_OFFSET     56   /* 4 bytes - Command Dword 14 */
+#define SQE_CDW15_OFFSET     60   /* 4 bytes - Command Dword 15 */
+#define SQE_SIZE             64   /* Total size in bytes */
+
+/**
+ * Submit Identify Controller Command without using structs
+ *
+ * @param sq_buffer      Pointer to submission queue memory
+ * @param sq_tail_ptr    Pointer to submission queue tail index (will be updated)
+ * @param sq_size        Size of the submission queue (entries)
+ * @param sq_doorbell    Pointer to submission queue doorbell register
+ * @param identify_data  Buffer to store identify data (4KB)
+ * @param cmd_id         Command ID to use
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_submit_identify_controller_nostruct(
+    void *sq_buffer,
+    uint32_t *sq_tail_ptr,
+    uint32_t sq_size,
+    volatile uint32_t *sq_doorbell,
+    void *identify_data,
+    uint16_t cmd_id)
+{
+    uint32_t sq_tail = *sq_tail_ptr;
+    
+    /* Calculate pointer to the next available submission queue entry */
+    uint8_t *sq_entry = (uint8_t *)sq_buffer + (sq_tail * SQE_SIZE);
+    
+    /* Clear the entire entry */
+    memset(sq_entry, 0, SQE_SIZE);
+    
+    /* Fill in the command */
+    sq_entry[SQE_OPCODE_OFFSET] = NVME_ADMIN_CMD_IDENTIFY;    /* Opcode: Identify */
+    sq_entry[SQE_FLAGS_OFFSET] = 0;                          /* Flags */
+    *(uint16_t *)(sq_entry + SQE_COMMAND_ID_OFFSET) = cmd_id;/* Command ID */
+    *(uint32_t *)(sq_entry + SQE_NSID_OFFSET) = 0;           /* No specific namespace */
+    
+    /* Set up PRP for data buffer */
+    *(uint64_t *)(sq_entry + SQE_PRP1_OFFSET) = (uint64_t)identify_data;
+    
+    /* Command Dword 10: Identify Controller structure (CNS=1) */
+    *(uint32_t *)(sq_entry + SQE_CDW10_OFFSET) = 1;
+    
+    /* Update submission queue tail pointer */
+    *sq_tail_ptr = (sq_tail + 1) % sq_size;
+    
+    /* Ring the submission queue doorbell */
+    *sq_doorbell = *sq_tail_ptr;
+    
+    printf("Submitted Identify Controller command (CMD_ID=%u)\n", cmd_id);
+    return 0;
+}
+
+/**
+ * Process Identify Controller data without using structs
+ *
+ * @param identify_data  Pointer to identify controller data (4KB buffer)
+ * @param max_queues_ptr Pointer to store max queue entries supported
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_process_identify_controller_nostruct(
+    void *identify_data,
+    uint16_t *max_queues_ptr)
+{
+    /* Define important identify data offsets */
+    const int ID_VID_OFFSET = 0;      /* Vendor ID - 2 bytes */
+    const int ID_SSVID_OFFSET = 2;    /* Subsystem Vendor ID - 2 bytes */
+    const int ID_SN_OFFSET = 4;       /* Serial Number - 20 bytes */
+    const int ID_MN_OFFSET = 24;      /* Model Number - 40 bytes */
+    const int ID_FR_OFFSET = 64;      /* Firmware Revision - 8 bytes */
+    const int ID_MAXCMD_OFFSET = 514; /* Maximum Combined Queue Size - 2 bytes */
+    const int ID_NN_OFFSET = 516;     /* Number of Namespaces - 4 bytes */
+    
+    uint8_t *data = (uint8_t *)identify_data;
+    
+    /* Extract and print device identifiers */
+    uint16_t vid = *(uint16_t *)(data + ID_VID_OFFSET);
+    uint16_t ssvid = *(uint16_t *)(data + ID_SSVID_OFFSET);
+    
+    /* Process serial number (20 bytes, space-padded ASCII) */
+    char serial_number[21] = {0};
+    memcpy(serial_number, data + ID_SN_OFFSET, 20);
+    /* Trim trailing spaces */
+    for (int i = 19; i >= 0; i--) {
+        if (serial_number[i] == ' ') {
+            serial_number[i] = '\0';
+        } else if (serial_number[i] != '\0') {
+            break;
+        }
+    }
+    
+    /* Process model number (40 bytes, space-padded ASCII) */
+    char model_number[41] = {0};
+    memcpy(model_number, data + ID_MN_OFFSET, 40);
+    /* Trim trailing spaces */
+    for (int i = 39; i >= 0; i--) {
+        if (model_number[i] == ' ') {
+            model_number[i] = '\0';
+        } else if (model_number[i] != '\0') {
+            break;
+        }
+    }
+    
+    /* Process firmware revision (8 bytes, space-padded ASCII) */
+    char firmware_rev[9] = {0};
+    memcpy(firmware_rev, data + ID_FR_OFFSET, 8);
+    /* Trim trailing spaces */
+    for (int i = 7; i >= 0; i--) {
+        if (firmware_rev[i] == ' ') {
+            firmware_rev[i] = '\0';
+        } else if (firmware_rev[i] != '\0') {
+            break;
+        }
+    }
+    
+    /* Extract maximum queue entries */
+    uint16_t max_queues = *(uint16_t *)(data + ID_MAXCMD_OFFSET);
+    *max_queues_ptr = max_queues;
+    
+    /* Extract number of namespaces */
+    uint32_t num_namespaces = *(uint32_t *)(data + ID_NN_OFFSET);
+    
+    /* Print controller information */
+    printf("NVMe Controller Information:\n");
+    printf("  Vendor ID: 0x%04X\n", vid);
+    printf("  Subsystem Vendor ID: 0x%04X\n", ssvid);
+    printf("  Serial Number: %s\n", serial_number);
+    printf("  Model Number: %s\n", model_number);
+    printf("  Firmware Revision: %s\n", firmware_rev);
+    printf("  Max Queue Entries: %u\n", max_queues);
+    printf("  Number of Namespaces: %u\n", num_namespaces);
+    
+    return 0;
+}
+
+/**
+ * Create NVMe I/O Completion Queue without using structs
+ *
+ * @param admin_sq_buffer    Pointer to admin submission queue memory
+ * @param admin_sq_tail_ptr  Pointer to admin submission queue tail index
+ * @param admin_sq_size      Size of admin submission queue (entries)
+ * @param admin_sq_doorbell  Pointer to admin submission queue doorbell register
+ * @param cq_buffer          Pointer to I/O completion queue memory
+ * @param cq_size            Size of I/O completion queue (entries)
+ * @param cq_id              Completion queue identifier
+ * @param cmd_id             Command ID to use
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_create_io_completion_queue_nostruct(
+    void *admin_sq_buffer,
+    uint32_t *admin_sq_tail_ptr,
+    uint32_t admin_sq_size,
+    volatile uint32_t *admin_sq_doorbell,
+    void *cq_buffer,
+    uint32_t cq_size,
+    uint16_t cq_id,
+    uint16_t cmd_id)
+{
+    uint32_t sq_tail = *admin_sq_tail_ptr;
+    
+    /* Calculate pointer to the next available submission queue entry */
+    uint8_t *sq_entry = (uint8_t *)admin_sq_buffer + (sq_tail * SQE_SIZE);
+    
+    /* Clear the entire entry */
+    memset(sq_entry, 0, SQE_SIZE);
+    
+    /* Fill in the command */
+    sq_entry[SQE_OPCODE_OFFSET] = NVME_ADMIN_CMD_CREATE_CQ;   /* Opcode: Create I/O Completion Queue */
+    sq_entry[SQE_FLAGS_OFFSET] = 0;                          /* Flags */
+    *(uint16_t *)(sq_entry + SQE_COMMAND_ID_OFFSET) = cmd_id;/* Command ID */
+    
+    /* Set up PRP for completion queue */
+    *(uint64_t *)(sq_entry + SQE_PRP1_OFFSET) = (uint64_t)cq_buffer;
+    
+    /* Command Dword 10: Queue Size and Queue Identifier */
+    uint32_t cdw10 = ((cq_size - 1) & 0xFFFF) | (cq_id << 16);
+    *(uint32_t *)(sq_entry + SQE_CDW10_OFFSET) = cdw10;
+    
+    /* Command Dword 11: Physically Contiguous, Interrupts Enabled */
+    uint32_t cdw11 = (1 << 0) | (1 << 1);
+    *(uint32_t *)(sq_entry + SQE_CDW11_OFFSET) = cdw11;
+    
+    /* Update submission queue tail pointer */
+    *admin_sq_tail_ptr = (sq_tail + 1) % admin_sq_size;
+    
+    /* Ring the submission queue doorbell */
+    *admin_sq_doorbell = *admin_sq_tail_ptr;
+    
+    printf("Submitted Create I/O Completion Queue %u command (CMD_ID=%u)\n", 
+           cq_id, cmd_id);
+    return 0;
+}
+
+/**
+ * Create NVMe I/O Submission Queue without using structs
+ *
+ * @param admin_sq_buffer    Pointer to admin submission queue memory
+ * @param admin_sq_tail_ptr  Pointer to admin submission queue tail index
+ * @param admin_sq_size      Size of admin submission queue (entries)
+ * @param admin_sq_doorbell  Pointer to admin submission queue doorbell register
+ * @param sq_buffer          Pointer to I/O submission queue memory
+ * @param sq_size            Size of I/O submission queue (entries)
+ * @param sq_id              Submission queue identifier
+ * @param cq_id              Associated completion queue identifier
+ * @param cmd_id             Command ID to use
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_create_io_submission_queue_nostruct(
+    void *admin_sq_buffer,
+    uint32_t *admin_sq_tail_ptr,
+    uint32_t admin_sq_size,
+    volatile uint32_t *admin_sq_doorbell,
+    void *sq_buffer,
+    uint32_t sq_size,
+    uint16_t sq_id,
+    uint16_t cq_id,
+    uint16_t cmd_id)
+{
+    uint32_t sq_tail = *admin_sq_tail_ptr;
+    
+    /* Calculate pointer to the next available submission queue entry */
+    uint8_t *sq_entry = (uint8_t *)admin_sq_buffer + (sq_tail * SQE_SIZE);
+    
+    /* Clear the entire entry */
+    memset(sq_entry, 0, SQE_SIZE);
+    
+    /* Fill in the command */
+    sq_entry[SQE_OPCODE_OFFSET] = NVME_ADMIN_CMD_CREATE_SQ;   /* Opcode: Create I/O Submission Queue */
+    sq_entry[SQE_FLAGS_OFFSET] = 0;                          /* Flags */
+    *(uint16_t *)(sq_entry + SQE_COMMAND_ID_OFFSET) = cmd_id;/* Command ID */
+    
+    /* Set up PRP for submission queue */
+    *(uint64_t *)(sq_entry + SQE_PRP1_OFFSET) = (uint64_t)sq_buffer;
+    
+    /* Command Dword 10: Queue Size and Queue Identifier */
+    uint32_t cdw10 = ((sq_size - 1) & 0xFFFF) | (sq_id << 16);
+    *(uint32_t *)(sq_entry + SQE_CDW10_OFFSET) = cdw10;
+    
+    /* Command Dword 11: Physically Contiguous, Queue Priority = Medium (bit 1),
+       and associated CQ ID */
+    uint32_t cdw11 = (1 << 0) | (1 << 1) | (cq_id << 16);
+    *(uint32_t *)(sq_entry + SQE_CDW11_OFFSET) = cdw11;
+    
+    /* Update submission queue tail pointer */
+    *admin_sq_tail_ptr = (sq_tail + 1) % admin_sq_size;
+    
+    /* Ring the submission queue doorbell */
+    *admin_sq_doorbell = *admin_sq_tail_ptr;
+    
+    printf("Submitted Create I/O Submission Queue %u command (CMD_ID=%u, CQ_ID=%u)\n", 
+           sq_id, cmd_id, cq_id);
+    return 0;
+}
+
+/**
+ * Create NVMe I/O Queue Pairs without using structs
+ *
+ * @param reg_base           Base address of NVMe controller registers
+ * @param admin_sq_buffer    Pointer to admin submission queue memory
+ * @param admin_sq_size      Size of admin submission queue (entries)
+ * @param admin_sq_tail_ptr  Pointer to admin submission queue tail index
+ * @param admin_sq_head_ptr  Pointer to admin submission queue head index
+ * @param admin_sq_doorbell  Pointer to admin submission queue doorbell register
+ * @param admin_cq_buffer    Pointer to admin completion queue memory
+ * @param admin_cq_size      Size of admin completion queue (entries)
+ * @param admin_cq_head_ptr  Pointer to admin completion queue head index
+ * @param admin_cq_phase_ptr Pointer to admin completion queue phase bit
+ * @param admin_cq_doorbell  Pointer to admin completion queue doorbell register
+ * @param num_queues         Number of I/O queue pairs to create
+ * @param queue_size         Size of each I/O queue (entries)
+ * @param db_stride          Doorbell stride from NVMe capabilities
+ * @param next_cmd_id_ptr    Pointer to next command ID to use (will be updated)
+ * @param poll_completion_fn Pointer to completion polling function
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_create_io_queues_nostruct(
+    volatile uint32_t *reg_base,
+    void *admin_sq_buffer,
+    uint32_t admin_sq_size,
+    uint32_t *admin_sq_tail_ptr,
+    uint32_t *admin_sq_head_ptr,
+    volatile uint32_t *admin_sq_doorbell,
+    void *admin_cq_buffer,
+    uint32_t admin_cq_size,
+    uint32_t *admin_cq_head_ptr,
+    uint32_t *admin_cq_phase_ptr,
+    volatile uint32_t *admin_cq_doorbell,
+    uint32_t num_queues,
+    uint32_t queue_size,
+    uint32_t db_stride,
+    uint16_t *next_cmd_id_ptr,
+    int (*poll_completion_fn)(
+        void *cq_buffer,
+        uint32_t cq_size,
+        uint32_t *cq_head_ptr,
+        uint32_t *cq_phase_ptr,
+        volatile uint32_t *cq_doorbell,
+        uint16_t cmd_id,
+        uint32_t timeout_ms,
+        uint32_t *sq_head_ptr))
+{
+    int ret;
+    uint16_t cmd_id;
+    
+    /* Array to hold queue memory pointers */
+    void **io_cq_buffers = calloc(num_queues, sizeof(void*));
+    void **io_sq_buffers = calloc(num_queues, sizeof(void*));
+    
+    if (!io_cq_buffers || !io_sq_buffers) {
+        printf("Error: Failed to allocate queue pointer arrays\n");
+        if (io_cq_buffers) free(io_cq_buffers);
+        if (io_sq_buffers) free(io_sq_buffers);
+        return -1;
+    }
+    
+    /* Skip admin queue (ID 0) which is already initialized */
+    for (uint16_t i = 1; i < num_queues; i++) {
+        /* Allocate and clear memory for I/O queues */
+        void *cq_buffer = aligned_alloc(4096, queue_size * 16);  /* 16 bytes per CQ entry */
+        void *sq_buffer = aligned_alloc(4096, queue_size * 64);  /* 64 bytes per SQ entry */
+        
+        if (!cq_buffer || !sq_buffer) {
+            printf("Error: Failed to allocate memory for I/O queue %u\n", i);
+            if (cq_buffer) free(cq_buffer);
+            if (sq_buffer) free(sq_buffer);
+            
+            /* Clean up already allocated queues */
+            for (uint16_t j = 1; j < i; j++) {
+                if (io_cq_buffers[j]) free(io_cq_buffers[j]);
+                if (io_sq_buffers[j]) free(io_sq_buffers[j]);
+            }
+            free(io_cq_buffers);
+            free(io_sq_buffers);
+            return -1;
+        }
+        
+        /* Store allocated buffers */
+        io_cq_buffers[i] = cq_buffer;
+        io_sq_buffers[i] = sq_buffer;
+        
+        /* Clear queue memory */
+        memset(cq_buffer, 0, queue_size * 16);
+        memset(sq_buffer, 0, queue_size * 64);
+        
+        /* First create I/O completion queue */
+        cmd_id = (*next_cmd_id_ptr)++;
+        ret = nvme_create_io_completion_queue_nostruct(
+            admin_sq_buffer,
+            admin_sq_tail_ptr,
+            admin_sq_size,
+            admin_sq_doorbell,
+            cq_buffer,
+            queue_size,
+            i,   /* CQ ID = queue index */
+            cmd_id
+        );
+        
+        if (ret) {
+            printf("Error: Failed to create I/O completion queue %u\n", i);
+            /* Clean up allocated queues */
+            for (uint16_t j = 1; j <= i; j++) {
+                if (io_cq_buffers[j]) free(io_cq_buffers[j]);
+                if (io_sq_buffers[j]) free(io_sq_buffers[j]);
+            }
+            free(io_cq_buffers);
+            free(io_sq_buffers);
+            return ret;
+        }
+        
+        /* Wait for completion */
+        ret = poll_completion_fn(
+            admin_cq_buffer,
+            admin_cq_size,
+            admin_cq_head_ptr,
+            admin_cq_phase_ptr,
+            admin_cq_doorbell,
+            cmd_id,
+            5000,  /* 5 second timeout */
+            admin_sq_head_ptr
+        );
+        
+        if (ret) {
+            printf("Error: Create I/O completion queue %u command failed\n", i);
+            /* Clean up allocated queues */
+            for (uint16_t j = 1; j <= i; j++) {
+                if (io_cq_buffers[j]) free(io_cq_buffers[j]);
+                if (io_sq_buffers[j]) free(io_sq_buffers[j]);
+            }
+            free(io_cq_buffers);
+            free(io_sq_buffers);
+            return ret;
+        }
+        
+        printf("Created I/O Completion Queue %u with %u entries\n", i, queue_size);
+        
+        /* Now create I/O submission queue associated with the completion queue */
+        cmd_id = (*next_cmd_id_ptr)++;
+        ret = nvme_create_io_submission_queue_nostruct(
+            admin_sq_buffer,
+            admin_sq_tail_ptr,
+            admin_sq_size,
+            admin_sq_doorbell,
+            sq_buffer,
+            queue_size,
+            i,   /* SQ ID = queue index */
+            i,   /* CQ ID = same as SQ ID */
+            cmd_id
+        );
+        
+        if (ret) {
+            printf("Error: Failed to create I/O submission queue %u\n", i);
+            /* Clean up allocated queues */
+            for (uint16_t j = 1; j <= i; j++) {
+                if (io_cq_buffers[j]) free(io_cq_buffers[j]);
+                if (io_sq_buffers[j]) free(io_sq_buffers[j]);
+            }
+            free(io_cq_buffers);
+            free(io_sq_buffers);
+            return ret;
+        }
+        
+        /* Wait for completion */
+        ret = poll_completion_fn(
+            admin_cq_buffer,
+            admin_cq_size,
+            admin_cq_head_ptr,
+            admin_cq_phase_ptr,
+            admin_cq_doorbell,
+            cmd_id,
+            5000,  /* 5 second timeout */
+            admin_sq_head_ptr
+        );
+        
+        if (ret) {
+            printf("Error: Create I/O submission queue %u command failed\n", i);
+            /* Clean up allocated queues */
+            for (uint16_t j = 1; j <= i; j++) {
+                if (io_cq_buffers[j]) free(io_cq_buffers[j]);
+                if (io_sq_buffers[j]) free(io_sq_buffers[j]);
+            }
+            free(io_cq_buffers);
+            free(io_sq_buffers);
+            return ret;
+        }
+        
+        printf("Created I/O Submission Queue %u with %u entries\n", i, queue_size);
+    }
+    
+    /* Successfully created all queues */
+    printf("Successfully created %u I/O queue pairs with %u entries each\n", 
+           num_queues - 1, queue_size);
+           
+    /* Note: We're deliberately not freeing io_cq_buffers and io_sq_buffers arrays
+       or their contents because these are the actual queue memory that will be
+       used for I/O operations. In a real implementation, you would store these
+       pointers somewhere for later use and cleanup. */
+    free(io_cq_buffers);
+    free(io_sq_buffers);
+    
+    return 0;
+}
+
+
+
+
+/**
+ * Calculate NVMe doorbell register address without using structs
+ *
+ * @param reg_base     Base address of NVMe controller registers
+ * @param is_sq        True for submission queue, false for completion queue
+ * @param queue_id     Queue identifier
+ * @param db_stride    Doorbell stride from controller capabilities
+ *
+ * @return Pointer to doorbell register
+ */
+ volatile uint32_t* nvme_get_doorbell_address(
+    volatile uint32_t *reg_base,
+    bool is_sq,
+    uint16_t queue_id,
+    uint32_t db_stride)
+{
+    /* Base doorbell registers for admin queues - use local constants to avoid conflict with macros */
+    const uint32_t REG_SQ0TDBL_OFFSET = 0x1000;  /* Submission Queue 0 Tail Doorbell */
+    const uint32_t REG_CQ0HDBL_OFFSET = 0x1004;  /* Completion Queue 0 Head Doorbell */
+    
+    /* Calculate doorbell stride in bytes */
+    uint32_t stride_bytes = 1 << (2 + db_stride);
+    uint32_t offset;
+    
+    if (is_sq) {
+        /* Submission Queue Tail Doorbell */
+        if (queue_id == 0) {
+            /* Admin Submission Queue */
+            offset = REG_SQ0TDBL_OFFSET;
+        } else {
+            /* I/O Submission Queue */
+            offset = REG_SQ0TDBL_OFFSET + (2 * queue_id) * stride_bytes;
+        }
+    } else {
+        /* Completion Queue Head Doorbell */
+        if (queue_id == 0) {
+            /* Admin Completion Queue */
+            offset = REG_CQ0HDBL_OFFSET;
+        } else {
+            /* I/O Completion Queue */
+            offset = REG_CQ0HDBL_OFFSET + (2 * queue_id) * stride_bytes;
+        }
+    }
+    
+    /* Calculate and return the address */
+    return (volatile uint32_t*)((volatile uint8_t*)reg_base + offset);
+}
+
+/**
+ * Ring NVMe submission queue doorbell without using structs
+ *
+ * @param reg_base     Base address of NVMe controller registers
+ * @param queue_id     Queue identifier
+ * @param tail_ptr     Pointer to submission queue tail index (will be updated)
+ * @param size         Size of the queue (entries)
+ * @param db_stride    Doorbell stride from controller capabilities
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_ring_sq_doorbell(
+    volatile uint32_t *reg_base,
+    uint16_t queue_id,
+    uint32_t *tail_ptr,
+    uint32_t size,
+    uint32_t db_stride)
+{
+    /* Update tail index (caller is responsible for incrementing it) */
+    *tail_ptr = *tail_ptr % size;
+    
+    /* Get doorbell register address */
+    volatile uint32_t *doorbell = nvme_get_doorbell_address(
+        reg_base,
+        true,   /* is_sq = true for submission queue */
+        queue_id,
+        db_stride
+    );
+    
+    /* Ring the doorbell */
+    *doorbell = *tail_ptr;
+    
+    return 0;
+}
+
+/**
+ * Ring NVMe completion queue doorbell without using structs
+ *
+ * @param reg_base     Base address of NVMe controller registers
+ * @param queue_id     Queue identifier
+ * @param head_ptr     Pointer to completion queue head index (will be updated)
+ * @param size         Size of the queue (entries)
+ * @param phase_ptr    Pointer to completion queue phase tag (will be updated)
+ * @param db_stride    Doorbell stride from controller capabilities
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_ring_cq_doorbell(
+    volatile uint32_t *reg_base,
+    uint16_t queue_id,
+    uint32_t *head_ptr,
+    uint32_t size,
+    uint32_t *phase_ptr,
+    uint32_t db_stride)
+{
+    /* Update head index (caller is responsible for incrementing it) */
+    *head_ptr = *head_ptr % size;
+    
+    /* Check if we wrapped around, if so toggle phase bit */
+    if (*head_ptr == 0) {
+        *phase_ptr = !(*phase_ptr);
+    }
+    
+    /* Get doorbell register address */
+    volatile uint32_t *doorbell = nvme_get_doorbell_address(
+        reg_base,
+        false,  /* is_sq = false for completion queue */
+        queue_id,
+        db_stride
+    );
+    
+    /* Ring the doorbell */
+    *doorbell = *head_ptr;
+    
+    return 0;
+}
+
+
+/**
+ * Submit command to NVMe submission queue and ring doorbell without using structs
+ *
+ * @param reg_base       Base address of NVMe controller registers
+ * @param sq_buffer      Pointer to submission queue memory
+ * @param sq_size        Size of the submission queue (entries)
+ * @param sq_entry_size  Size of each submission queue entry in bytes
+ * @param sq_tail_ptr    Pointer to submission queue tail index (will be updated)
+ * @param queue_id       Queue identifier
+ * @param db_stride      Doorbell stride from controller capabilities
+ * @param entry_data     Command data to be copied to submission queue entry
+ * @param entry_size     Size of command data in bytes
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_submit_command_nostruct(
+    volatile uint32_t *reg_base,
+    void *sq_buffer,
+    uint32_t sq_size,
+    uint32_t sq_entry_size,
+    uint32_t *sq_tail_ptr,
+    uint16_t queue_id,
+    uint32_t db_stride,
+    const void *entry_data,
+    uint32_t entry_size)
+{
+    /* Calculate pointer to the next available submission queue entry */
+    uint8_t *sq_entry = (uint8_t *)sq_buffer + (*sq_tail_ptr * sq_entry_size);
+    
+    /* Clear the entry and copy command data */
+    memset(sq_entry, 0, sq_entry_size);
+    memcpy(sq_entry, entry_data, entry_size < sq_entry_size ? entry_size : sq_entry_size);
+    
+    /* Increment tail pointer */
+    *sq_tail_ptr = (*sq_tail_ptr + 1) % sq_size;
+    
+    /* Ring the doorbell */
+    return nvme_ring_sq_doorbell(
+        reg_base,
+        queue_id,
+        sq_tail_ptr,
+        sq_size,
+        db_stride
+    );
+}
+
+
+
+
+
+
+
+/* For forward declarations - would typically be in a header file */
+extern int nvme_reset_and_enable_controller_nostruct(
+    volatile uint32_t *reg_base, uint32_t timeout_ms);
+    
+extern int nvme_init_admin_queue_nostruct(
+    volatile uint32_t *reg_base,
+    void *admin_sq_buffer,
+    uint32_t admin_sq_size,
+    void *admin_cq_buffer,
+    uint32_t admin_cq_size,
+    uint32_t db_stride,
+    uint32_t *sq_tail_ptr,
+    uint32_t *sq_head_ptr,
+    uint32_t *cq_head_ptr,
+    uint32_t *cq_phase_ptr,
+    volatile uint32_t **sq_doorbell_ptr,
+    volatile uint32_t **cq_doorbell_ptr);
+    
+extern int nvme_submit_identify_controller_nostruct(
+    void *sq_buffer,
+    uint32_t *sq_tail_ptr,
+    uint32_t sq_size,
+    volatile uint32_t *sq_doorbell,
+    void *identify_data,
+    uint16_t cmd_id);
+    
+    
+extern int nvme_process_identify_controller_nostruct(
+    void *identify_data,
+    uint16_t *max_queues_ptr);
+    
+extern int nvme_create_io_queues_nostruct(
+    volatile uint32_t *reg_base,
+    void *admin_sq_buffer,
+    uint32_t admin_sq_size,
+    uint32_t *admin_sq_tail_ptr,
+    uint32_t *admin_sq_head_ptr,
+    volatile uint32_t *admin_sq_doorbell,
+    void *admin_cq_buffer,
+    uint32_t admin_cq_size,
+    uint32_t *admin_cq_head_ptr,
+    uint32_t *admin_cq_phase_ptr,
+    volatile uint32_t *admin_cq_doorbell,
+    uint32_t num_queues,
+    uint32_t queue_size,
+    uint32_t db_stride,
+    uint16_t *next_cmd_id_ptr,
+    int (*poll_completion_fn)(
+        void *cq_buffer,
+        uint32_t cq_size,
+        uint32_t *cq_head_ptr,
+        uint32_t *cq_phase_ptr,
+        volatile uint32_t *cq_doorbell,
+        uint16_t cmd_id,
+        uint32_t timeout_ms,
+        uint32_t *sq_head_ptr));
+
+
+/* External PCIe functions */
+extern uint64_t pcie_get_bar_address(uint8_t bus, uint8_t device, uint8_t function, uint8_t bar_num);
+extern uint64_t pcie_get_bar_size(uint8_t bus, uint8_t device, uint8_t function, uint8_t bar_num);
+extern void pcie_enable_device(uint8_t bus, uint8_t device, uint8_t function);
+extern bool pcie_find_device(uint8_t class_code, uint8_t subclass, uint8_t prog_if,
+                           uint8_t* out_bus, uint8_t* out_device, uint8_t* out_function);
+
+/**
+ * Initialize NVMe controller and prepare for I/O operations without using structs
+ *
+ * @param bus                 PCIe bus number
+ * @param device              PCIe device number
+ * @param function            PCIe function number
+ * @param reg_base_ptr        Pointer to store register base address
+ * @param admin_sq_buffer_ptr Pointer to store admin submission queue buffer
+ * @param admin_sq_size_ptr   Pointer to store admin submission queue size
+ * @param admin_sq_tail_ptr   Pointer to store admin submission queue tail
+ * @param admin_sq_head_ptr   Pointer to store admin submission queue head
+ * @param admin_sq_doorbell_ptr Pointer to store admin submission queue doorbell
+ * @param admin_cq_buffer_ptr Pointer to store admin completion queue buffer
+ * @param admin_cq_size_ptr   Pointer to store admin completion queue size
+ * @param admin_cq_head_ptr   Pointer to store admin completion queue head
+ * @param admin_cq_phase_ptr  Pointer to store admin completion queue phase
+ * @param admin_cq_doorbell_ptr Pointer to store admin completion queue doorbell
+ * @param db_stride_ptr       Pointer to store doorbell stride
+ * @param next_cmd_id_ptr     Pointer to store next command ID
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_init_device_nostruct(
+    uint8_t bus,
+    uint8_t device,
+    uint8_t function,
+    volatile uint32_t **reg_base_ptr,
+    void **admin_sq_buffer_ptr,
+    uint32_t *admin_sq_size_ptr,
+    uint32_t *admin_sq_tail_ptr,
+    uint32_t *admin_sq_head_ptr,
+    volatile uint32_t **admin_sq_doorbell_ptr,
+    void **admin_cq_buffer_ptr,
+    uint32_t *admin_cq_size_ptr,
+    uint32_t *admin_cq_head_ptr,
+    uint32_t *admin_cq_phase_ptr,
+    volatile uint32_t **admin_cq_doorbell_ptr,
+    uint32_t *db_stride_ptr,
+    uint16_t *next_cmd_id_ptr)
+{
+    int ret;
+    
+    /* Enable PCIe device */
+    pcie_enable_device(bus, device, function);
+    
+    /* Map BAR0 which contains controller registers */
+    uint64_t bar0_addr = pcie_get_bar_address(bus, device, function, 0);
+    uint64_t bar0_size = pcie_get_bar_size(bus, device, function, 0);
+    
+    if (bar0_addr == 0 || bar0_size == 0) {
+        printf("Error: Failed to map NVMe controller registers (BAR0)\n");
+        return -1;
+    }
+    
+    printf("NVMe controller registers mapped at 0x%016lx (size: %lu bytes)\n", 
+           bar0_addr, bar0_size);
+    
+    /* Map controller registers */
+    volatile uint32_t *reg_base = (volatile uint32_t *)bar0_addr;
+    *reg_base_ptr = reg_base;
+    
+    /* Reset and enable controller */
+    ret = nvme_reset_and_enable_controller_nostruct(reg_base, 5000);
+    if (ret) {
+        printf("Error: Failed to reset and enable NVMe controller\n");
+        return ret;
+    }
+    
+    /* Read controller capabilities for doorbell stride */
+    uint32_t cap_lo = reg_base[0];
+    uint32_t cap_hi = reg_base[1];
+    uint64_t cap = ((uint64_t)cap_hi << 32) | cap_lo;
+    
+    /* Extract doorbell stride */
+    uint32_t db_stride = (cap >> 32) & 0xF;
+    *db_stride_ptr = db_stride;
+    
+    /* Initialize admin queue variables */
+    uint32_t admin_sq_size = 64;
+    uint32_t admin_cq_size = 64;
+    *admin_sq_size_ptr = admin_sq_size;
+    *admin_cq_size_ptr = admin_cq_size;
+    *admin_sq_tail_ptr = 0;
+    *admin_sq_head_ptr = 0;
+    *admin_cq_head_ptr = 0;
+    *admin_cq_phase_ptr = 1;
+    *next_cmd_id_ptr = 0;
+    
+    /* Allocate admin queue memory */
+    void *admin_sq_buffer = aligned_alloc(4096, admin_sq_size * 64);  /* 64 bytes per entry */
+    void *admin_cq_buffer = aligned_alloc(4096, admin_cq_size * 16);  /* 16 bytes per entry */
+    if (!admin_sq_buffer || !admin_cq_buffer) {
+        printf("Error: Failed to allocate admin queue memory\n");
+        if (admin_sq_buffer) free(admin_sq_buffer);
+        if (admin_cq_buffer) free(admin_cq_buffer);
+        return -1;
+    }
+    
+    *admin_sq_buffer_ptr = admin_sq_buffer;
+    *admin_cq_buffer_ptr = admin_cq_buffer;
+    
+    /* Initialize admin queues */
+    ret = nvme_init_admin_queue_nostruct(
+        reg_base,
+        admin_sq_buffer,
+        admin_sq_size,
+        admin_cq_buffer,
+        admin_cq_size,
+        db_stride,
+        admin_sq_tail_ptr,
+        admin_sq_head_ptr,
+        admin_cq_head_ptr,
+        admin_cq_phase_ptr,
+        admin_sq_doorbell_ptr,
+        admin_cq_doorbell_ptr
+    );
+    
+    if (ret) {
+        printf("Error: Failed to initialize admin queues\n");
+        free(admin_sq_buffer);
+        free(admin_cq_buffer);
+        return ret;
+    }
+    
+    return 0;
+}
+
+/**
+ * Identify NVMe controller and create I/O queues without using structs
+ *
+ * @param reg_base            Register base address
+ * @param admin_sq_buffer     Admin submission queue buffer
+ * @param admin_sq_size       Admin submission queue size
+ * @param admin_sq_tail_ptr   Admin submission queue tail pointer
+ * @param admin_sq_head_ptr   Admin submission queue head pointer
+ * @param admin_sq_doorbell   Admin submission queue doorbell register
+ * @param admin_cq_buffer     Admin completion queue buffer
+ * @param admin_cq_size       Admin completion queue size
+ * @param admin_cq_head_ptr   Admin completion queue head pointer
+ * @param admin_cq_phase_ptr  Admin completion queue phase pointer
+ * @param admin_cq_doorbell   Admin completion queue doorbell register
+ * @param db_stride           Doorbell stride
+ * @param next_cmd_id_ptr     Next command ID (will be updated)
+ * @param num_io_queues       Number of I/O queues to create
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int nvme_setup_io_queues_nostruct(
+    volatile uint32_t *reg_base,
+    void *admin_sq_buffer,
+    uint32_t admin_sq_size,
+    uint32_t *admin_sq_tail_ptr,
+    uint32_t *admin_sq_head_ptr,
+    volatile uint32_t *admin_sq_doorbell,
+    void *admin_cq_buffer,
+    uint32_t admin_cq_size,
+    uint32_t *admin_cq_head_ptr,
+    uint32_t *admin_cq_phase_ptr,
+    volatile uint32_t *admin_cq_doorbell,
+    uint32_t db_stride,
+    uint16_t *next_cmd_id_ptr,
+    uint32_t num_io_queues)
+{
+    int ret;
+    uint16_t cmd_id;
+    
+    /* Allocate identify data buffer */
+    void *identify_data = aligned_alloc(4096, 4096);
+    if (!identify_data) {
+        printf("Error: Failed to allocate identify data buffer\n");
+        return -1;
+    }
+    
+    /* Submit identify controller command */
+    cmd_id = (*next_cmd_id_ptr)++;
+    ret = nvme_submit_identify_controller_nostruct(
+        admin_sq_buffer,
+        admin_sq_tail_ptr,
+        admin_sq_size,
+        admin_sq_doorbell,
+        identify_data,
+        cmd_id
+    );
+    
+    if (ret) {
+        printf("Error: Failed to submit identify controller command\n");
+        free(identify_data);
+        return ret;
+    }
+    
+    /* Wait for completion */
+    ret = nvme_poll_completion_nostruct(
+        admin_cq_buffer,
+        admin_cq_size,
+        admin_cq_head_ptr,
+        admin_cq_phase_ptr,
+        admin_cq_doorbell,
+        cmd_id,
+        5000, /* 5 second timeout */
+        admin_sq_head_ptr
+    );
+    
+    if (ret) {
+        printf("Error: Identify controller command failed\n");
+        free(identify_data);
+        return ret;
+    }
+    
+    /* Process identify controller data */
+    uint16_t max_queues;
+    ret = nvme_process_identify_controller_nostruct(identify_data, &max_queues);
+    if (ret) {
+        printf("Error: Failed to process identify controller data\n");
+        free(identify_data);
+        return ret;
+    }
+    
+    /* Check queue limits */
+    if (num_io_queues > max_queues + 1) {
+        printf("Warning: Controller only supports %u queues, requested %u\n", 
+               max_queues + 1, num_io_queues);
+        num_io_queues = max_queues + 1;
+    }
+    
+    free(identify_data);
+    
+    /* Create I/O queues */
+    ret = nvme_create_io_queues_nostruct(
+        reg_base,
+        admin_sq_buffer,
+        admin_sq_size,
+        admin_sq_tail_ptr,
+        admin_sq_head_ptr,
+        admin_sq_doorbell,
+        admin_cq_buffer,
+        admin_cq_size,
+        admin_cq_head_ptr,
+        admin_cq_phase_ptr,
+        admin_cq_doorbell,
+        num_io_queues,
+        1024, /* Queue size */
+        db_stride,
+        next_cmd_id_ptr,
+        nvme_poll_completion_nostruct
+    );
+    
+    if (ret) {
+        printf("Error: Failed to create I/O queues\n");
+        return ret;
+    }
+    
+    return 0;
+}
+
+/**
+ * Main function for NVMe testing without structs
+ */
+int nvme_test(void) {
+    int ret;
+    uint8_t bus, device, function;
+    
+    /* Find NVMe device */
+    printf("Searching for NVMe devices...\n");
+    if (!pcie_find_device(0x01, 0x08, 0x02, &bus, &device, &function)) {
+        printf("Error: No NVMe device found\n");
+        return -1;
+    }
+    
+    printf("Found NVMe device at %02X:%02X.%X\n", bus, device, function);
+    
+    /* State variables for NVMe controller and queues */
+    volatile uint32_t *reg_base;
+    void *admin_sq_buffer;
+    uint32_t admin_sq_size;
+    uint32_t admin_sq_tail;
+    uint32_t admin_sq_head;
+    volatile uint32_t *admin_sq_doorbell;
+    void *admin_cq_buffer;
+    uint32_t admin_cq_size;
+    uint32_t admin_cq_head;
+    uint32_t admin_cq_phase;
+    volatile uint32_t *admin_cq_doorbell;
+    uint32_t db_stride;
+    uint16_t next_cmd_id;
+    
+    /* Initialize NVMe device */
+    ret = nvme_init_device_nostruct(
+        bus, device, function,
+        &reg_base,
+        &admin_sq_buffer,
+        &admin_sq_size,
+        &admin_sq_tail,
+        &admin_sq_head,
+        &admin_sq_doorbell,
+        &admin_cq_buffer,
+        &admin_cq_size,
+        &admin_cq_head,
+        &admin_cq_phase,
+        &admin_cq_doorbell,
+        &db_stride,
+        &next_cmd_id
+    );
+    
+    if (ret) {
+        printf("Error: Failed to initialize NVMe device\n");
+        return ret;
+    }
+    
+    /* Setup I/O queues */
+    ret = nvme_setup_io_queues_nostruct(
+        reg_base,
+        admin_sq_buffer,
+        admin_sq_size,
+        &admin_sq_tail,
+        &admin_sq_head,
+        admin_sq_doorbell,
+        admin_cq_buffer,
+        admin_cq_size,
+        &admin_cq_head,
+        &admin_cq_phase,
+        admin_cq_doorbell,
+        db_stride,
+        &next_cmd_id,
+        8 /* Number of I/O queues */
+    );
+    
+    if (ret) {
+        printf("Error: Failed to setup I/O queues\n");
+        /* Cleanup admin queues */
+        free(admin_sq_buffer);
+        free(admin_cq_buffer);
+        return ret;
+    }
+    
+    printf("NVMe initialization complete\n");
+    
+    /* Cleanup */
+    free(admin_sq_buffer);
+    free(admin_cq_buffer);
+    
+    return 0;
 }

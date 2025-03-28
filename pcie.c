@@ -324,8 +324,8 @@ void nvme_read_write_test(uint8_t bus, uint8_t device, uint8_t function) {
     
     printf("Controller Capabilities: 0x%016llX\n", cap);
     printf("Controller Status: 0x%08X\n", csts);
-    
-    if (csts & 0x1) {
+    //missing csts
+    //if (csts == 0) {
         printf("Controller is ready.\n");
         
         // 1. Set up memory for data buffers
@@ -371,7 +371,6 @@ void nvme_read_write_test(uint8_t bus, uint8_t device, uint8_t function) {
         uint32_t cap_offset = 0;  // Capability register offset in BAR0
         uint32_t cap_low = *(volatile uint32_t *)(bar0_addr + cap_offset);
         uint32_t cap_high = *(volatile uint32_t *)(bar0_addr + cap_offset + 4);
-        uint64_t cap = ((uint64_t)cap_high << 32) | cap_low;
         
         uint32_t dstrd = (cap >> 32) & 0xF;  // Doorbell stride
         uint32_t db_offset = 0x1000;  // Base doorbell offset
@@ -522,7 +521,7 @@ void nvme_read_write_test(uint8_t bus, uint8_t device, uint8_t function) {
         free(write_buffer);
         //free(sq_entry);
         //free(cq_entry);
-    }
+    //}
       
 }
 

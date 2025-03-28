@@ -160,17 +160,6 @@ char* strcpy(char* dest, const char* src) {
     return original_dest;
 }
 
-/* String comparison */
-bool strcmp(const char* s1, const char* s2) {
-    while (*s1 && *s2) {
-        if (*s1 != *s2) {
-            return false;
-        }
-        s1++;
-        s2++;
-    }
-    return *s1 == *s2;
-}
 
 /* Integer to string conversion */
 void itoa(int value, char* str, int base) {
@@ -918,6 +907,19 @@ void cmd_hello() {
     printf("Hello, user!\n");
 }
 
+
+
+
+
+
+
+
+
+#include "tpm.h" 
+
+
+
+
 /* Modified kernel_main function */
 void kernel_main() {
     /* Initialize terminal interface */
@@ -930,7 +932,9 @@ void kernel_main() {
     
     /* Initialize the real-time clock */
     init_rtc();
-	
+
+    tpm_init();
+	tpm_secure_text_example("This is a secret message stored securely in the TPM.");
 	printf("Initialization complete. Start typing commands...\n");
 
     /* Display initial prompt */

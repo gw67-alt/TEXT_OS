@@ -932,7 +932,7 @@ void kernel_main() {
     init_rtc();
 	
     // List NVMe devices
-    list_nvme_devices();
+    printf(nvme_test());
 	printf("Initialization complete. Start typing commands...\n");
 
     /* Display initial prompt */

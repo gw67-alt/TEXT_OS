@@ -931,8 +931,6 @@ void kernel_main() {
     /* Initialize the real-time clock */
     init_rtc();
 	
-    // List NVMe devices
-    printf(nvme_test());
 	printf("Initialization complete. Start typing commands...\n");
 
     /* Display initial prompt */

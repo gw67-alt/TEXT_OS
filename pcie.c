@@ -60,7 +60,7 @@ static const uint32_t IO_QUEUE_SIZE = 1024;
 static const uint32_t PAGE_SIZE = 4096;
 static const uint32_t NUM_IO_QUEUES = 4;
 static const uint32_t SECTOR_SIZE = 512;
-static const uint32_t COMMAND_TIMEOUT_MS = 250;
+static const uint32_t COMMAND_TIMEOUT_MS = 5000;
 
 /* Static memory for NVMe controller mapping */
 static volatile uint32_t* nvme_regs = NULL;
@@ -164,6 +164,8 @@ static uint64_t pcie_get_nvme_bar_address(uint8_t bus, uint8_t device, uint8_t f
 static int nvme_reset_and_enable_controller(void) {
     uint64_t cap;
     uint32_t cc, csts;
+    uint32_t timeout_ms = COMMAND_TIMEOUT_MS;
+    
     /* Read controller capabilities */
     cap = ((uint64_t)nvme_regs[NVME_REG_CAP_HI/4] << 32) | nvme_regs[NVME_REG_CAP_LO/4];
     db_stride = (cap >> 32) & 0xF;
@@ -172,16 +174,14 @@ static int nvme_reset_and_enable_controller(void) {
     cc = nvme_regs[NVME_REG_CC/4];
     cc &= ~0x1;  // Clear Enable bit
     nvme_regs[NVME_REG_CC/4] = cc;
-    volatile uint32_t timeout_ms = COMMAND_TIMEOUT_MS;
-
+    
     /* Wait for controller to become disabled */
     do {
         csts = nvme_regs[NVME_REG_CSTS/4];
         if ((csts & 0x1) == 0) break;
         // In a real implementation, add a delay here
-    } while (timeout_ms--); {
-        usleep(1);
-    }
+    } while (timeout_ms-- > 0);
+    
     if (timeout_ms == 0) {
         // Controller failed to disable
         return -1;
@@ -222,10 +222,7 @@ static int nvme_reset_and_enable_controller(void) {
         csts = nvme_regs[NVME_REG_CSTS/4];
         if (csts & 0x1) break;
         // In a real implementation, add a delay here
-    } 
-    while (timeout_ms--); {
-        usleep(1);
-    }
+    } while (timeout_ms-- > 0);
     
     if (timeout_ms == 0) {
         // Controller failed to enable
@@ -312,8 +309,9 @@ static int nvme_wait_for_completion(uint16_t cq_id, uint16_t cmd_id) {
     uint32_t* cq_phase_ptr = (cq_id == 0) ? &admin_cq_phase : &io_cq_phase;
     uint32_t cq_size = (cq_id == 0) ? ADMIN_QUEUE_SIZE : IO_QUEUE_SIZE;
     
-    volatile uint32_t timeout_ms = COMMAND_TIMEOUT_MS;    
-    while (timeout_ms-- > 0) {
+    uint32_t timeout = COMMAND_TIMEOUT_MS;
+    
+    while (timeout-- > 0) {
         uint8_t* cqe = cq_buffer + (*cq_head_ptr * CQE_SIZE);
         
         /* Check phase bit to see if entry is valid */
@@ -343,9 +341,7 @@ static int nvme_wait_for_completion(uint16_t cq_id, uint16_t cmd_id) {
             }
         }
         
-        while (timeout_ms--) {
-            usleep(1);
-        }
+        /* In a real implementation, add a delay here */
     }
     
     /* Timeout occurred */
@@ -395,8 +391,7 @@ static int nvme_create_io_completion_queue(void) {
     
     /* Ring doorbell */
     nvme_ring_sq_doorbell(0, admin_sq_tail);
-
-
+    
     /* Wait for completion */
     return nvme_wait_for_completion(0, cmd_id);
 }
@@ -803,9 +798,10 @@ static inline int nvme_write_inline(uint64_t lba, const void* data, uint32_t siz
     
     /* Simple polling loop for completion */
     printf("Waiting for command completion...\n");
-    volatile uint32_t timeout_ms = COMMAND_TIMEOUT_MS;
-    while (timeout_ms--) {
-        usleep(1);
+    volatile uint32_t timeout = 1000000;
+    while (timeout--) {
+        /* In real code, would check completion queue entry */
+        /* For this example, we just assume success after a delay */
     }
     
     printf("nvme_write_inline: Write operation completed\n");
@@ -869,10 +865,10 @@ static int nvme_minimal_write(uint64_t lba, const uint8_t* data, uint32_t count)
     *NVME_SQ_DOORBELL = 1;  // Increment tail pointer
     
     /* Poll for completion */
-    static uint32_t timeout_ms = COMMAND_TIMEOUT_MS;
+    static uint32_t timeout = 1000000;
     static uint8_t phase_bit = 1;
     
-    while (timeout_ms--) {
+    while (timeout--) {
         /* Check completion queue phase bit */
         if ((cq_entry[15] & 0x01) == phase_bit) {
             /* Check if successful (status code 0) */
@@ -887,10 +883,7 @@ static int nvme_minimal_write(uint64_t lba, const uint8_t* data, uint32_t count)
         }
         
         /* Minimal delay in polling loop */
-        volatile uint32_t timeout_ms = COMMAND_TIMEOUT_MS;
-        while (timeout_ms--) {
-            usleep(1);
-        }
+        for (volatile int i = 0; i < 100; i++);
     }
     
     /* Timeout occurred */

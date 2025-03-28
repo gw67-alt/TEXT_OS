@@ -1,17 +1,10 @@
 
-
 #include <stdbool.h> /* C doesn't have booleans by default. */
 #include <stddef.h>
 #include <stdint.h>
 #include "hardware_specs.h"
 #include "io.h"
 #include "stdio.h"
-
-
-#define SATA_STATUS_DET_MASK      0x0F  // Device Detection
-#define SATA_STATUS_IPM_MASK      0xF00 // Interface Power Management
-#define SATA_STATUS_DET_PRESENT   0x03  // Device Present and Established Communication
-#define SATA_STATUS_IPM_ACTIVE    0x100 // Active State
 
 /* Check if the compiler thinks we are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -99,7 +92,7 @@ void timer_handler();
 void init_pic();
 void init_pit();
 void init_keyboard();
-void kernel_help();
+void cmd_help();
 void cmd_clear();
 void cmd_hello();
 void process_command();
@@ -160,6 +153,17 @@ char* strcpy(char* dest, const char* src) {
     return original_dest;
 }
 
+/* String comparison */
+bool strcmp(const char* s1, const char* s2) {
+    while (*s1 && *s2) {
+        if (*s1 != *s2) {
+            return false;
+        }
+        s1++;
+        s2++;
+    }
+    return *s1 == *s2;
+}
 
 /* Integer to string conversion */
 void itoa(int value, char* str, int base) {
@@ -805,7 +809,7 @@ int command_length = 0;
 bool command_ready = false;
 
 // Function prototypes for command handlers
-void kernel_help();
+void cmd_help();
 void cmd_clear();
 void cmd_hello();
 void cmd_time(); // New command for displaying time info
@@ -879,7 +883,7 @@ void process_command() {
     
     // Check against known commands
     if (strcmp(command_buffer, "help")) {
-        kernel_help();
+        cmd_help();
     } else if (strcmp(command_buffer, "clear")) {
         cmd_clear();
     } else if (strcmp(command_buffer, "hello")) {
@@ -892,7 +896,7 @@ void process_command() {
 }
 
 /* Command implementations */
-void kernel_help() {
+void cmd_help() {
     printf("Available commands:\n");
     printf("  help  - Show this help message\n");
     printf("  clear - Clear the screen\n");
@@ -907,189 +911,6 @@ void cmd_hello() {
     printf("Hello, user!\n");
 }
 
-
-
-#include "tpm.h" 
-
-// External declarations for the TPM functions
-extern uint32_t detect_tpm_base_address(void);
-extern bool tpm_init(void);
-extern bool tpm_startup(uint16_t startupType);
-extern bool tpm_self_test(bool full_test);
-extern bool tpm_store_secure_text(const char* label, const char* text);
-extern bool tpm_retrieve_secure_text(const char* label, char* text, uint16_t maxLength);
-extern void tpm_auto_detection_demo(void);
-extern uint32_t tpm_get_base_address(void);
-
-// Simple boot menu function
-void display_boot_menu(void) {
-    printf("==================================\n");
-    printf("   TPM Secure Storage Boot Menu   \n");
-    printf("==================================\n");
-    printf("1. Initialize TPM\n");
-    printf("2. Run TPM Self-test\n");
-    printf("3. Store Secure Data\n");
-    printf("4. Retrieve Secure Data\n");
-    printf("5. Exit\n");
-    printf("Select an option: ");
-}
-
-// Function to get user input (simulated for bare metal)
-int get_user_input(void) {
-    // In a real bare metal environment, this would read from keyboard
-    // For this example, we'll simulate input by returning a value
-    static int option = 1;
-    return option++;  // Return incrementing values to simulate menu navigation
-}
-
-// Function to get string input (simulated for bare metal)
-void get_string_input(char* buffer, int max_len, const char* prompt) {
-    // In a real bare metal environment, this would read from keyboard
-    // For this example, we'll simulate input with fixed values
-    static int call_count = 0;
-    const char* sample_inputs[] = {
-        "boot_password",
-        "secret_encryption_key",
-        "system_configuration",
-        "admin_credentials"
-    };
-    
-    const char* sample_values[] = {
-        "s3cur3P@ssword123!",
-        "AES256_KEY_0x1234ABCD9876FEDC",
-        "boot_timeout=30;debug=false;secure_mode=true",
-        "username=admin;role=superuser;privileges=all"
-    };
-    
-    printf("%s", prompt);
-    
-    if (call_count % 2 == 0) {
-        // Even calls return labels
-        strncpy(buffer, sample_inputs[call_count/2 % 4], max_len);
-    } else {
-        // Odd calls return values
-        strncpy(buffer, sample_values[call_count/2 % 4], max_len);
-    }
-    
-    printf("%s\n", buffer);  // Echo the simulated input
-    call_count++;
-}
-
-// Main application entry point
-int tpm(void) {
-    bool running = true;
-    bool tpm_initialized = false;
-    char label[64] = {0};
-    char text[256] = {0};
-    int option;
-    
-    printf("TPM Secure Storage Application Starting...\n");
-    
-    // Auto-detect TPM base address at startup
-    uint32_t tpm_base = detect_tpm_base_address();
-    if (tpm_base) {
-        printf("TPM detected at address: 0x%08X\n", tpm_base);
-    } else {
-        printf("TPM detection failed, using default address\n");
-    }
-    
-    while (running) {
-        display_boot_menu();
-        option = get_user_input();
-        printf("%d\n", option);  // Echo the simulated input
-        
-        switch (option) {
-            case 1:  // Initialize TPM
-                printf("Initializing TPM...\n");
-                if (tpm_init()) {
-                    printf("TPM initialized successfully at 0x%08X\n", detect_tpm_base_address());
-                    
-                    if (!tpm_startup(0x0000)) {  // TPM_SU_CLEAR
-                        printf("TPM startup failed (may be already started)\n");
-                    } else {
-                        printf("TPM startup succeeded\n");
-                    }
-                    
-                    tpm_initialized = true;
-                } else {
-                    printf("TPM initialization failed\n");
-                }
-                break;
-                
-            case 2:  // Run TPM Self-test
-                if (!tpm_initialized) {
-                    printf("Please initialize TPM first\n");
-                    break;
-                }
-                
-                printf("Running TPM self-test...\n");
-                if (tpm_self_test(false)) {
-                    printf("TPM self-test passed\n");
-                } else {
-                    printf("TPM self-test failed\n");
-                }
-                break;
-                
-            case 3:  // Store Secure Data
-                if (!tpm_initialized) {
-                    printf("Please initialize TPM first\n");
-                    break;
-                }
-                
-                memset(label, 0, sizeof(label));
-                memset(text, 0, sizeof(text));
-                
-                get_string_input(label, sizeof(label)-1, "Enter data label: ");
-                get_string_input(text, sizeof(text)-1, "Enter data to store: ");
-                
-                printf("Storing secure data with label '%s'...\n", label);
-                if (tpm_store_secure_text(label, text)) {
-                    printf("Data stored successfully\n");
-                } else {
-                    printf("Failed to store data\n");
-                }
-                break;
-                
-            case 4:  // Retrieve Secure Data
-                if (!tpm_initialized) {
-                    printf("Please initialize TPM first\n");
-                    break;
-                }
-                
-                memset(label, 0, sizeof(label));
-                memset(text, 0, sizeof(text));
-                
-                get_string_input(label, sizeof(label)-1, "Enter data label to retrieve: ");
-                
-                printf("Retrieving secure data with label '%s'...\n", label);
-                if (tpm_retrieve_secure_text(label, text, sizeof(text))) {
-                    printf("Retrieved data: %s\n", text);
-                } else {
-                    printf("Failed to retrieve data\n");
-                }
-                break;
-                
-            
-            case 5:  // Exit
-                printf("Exiting application...\n");
-                running = false;
-                break;
-                
-            default:
-                printf("Invalid option, please try again\n");
-                break;
-        }
-        
-        printf("\nPress any key to continue...\n");
-        // In a real implementation, this would wait for a keypress
-    }
-    
-    printf("TPM Secure Storage Application Terminated\n");
-    return 0;
-}
-
-
-
 /* Modified kernel_main function */
 void kernel_main() {
     /* Initialize terminal interface */
@@ -1102,15 +923,10 @@ void kernel_main() {
     
     /* Initialize the real-time clock */
     init_rtc();
+	
+    enumerate_pci_devices();	
 
-
-
-    tpm();
-
-
-
-
-    printf("Initialization complete. Start typing commands...\n");
+	printf("Initialization complete. Start typing commands...\n");
 
     /* Display initial prompt */
     printf("> ");

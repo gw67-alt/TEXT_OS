@@ -1,10 +1,17 @@
 
+
 #include <stdbool.h> /* C doesn't have booleans by default. */
 #include <stddef.h>
 #include <stdint.h>
 #include "hardware_specs.h"
 #include "io.h"
 #include "stdio.h"
+
+
+#define SATA_STATUS_DET_MASK      0x0F  // Device Detection
+#define SATA_STATUS_IPM_MASK      0xF00 // Interface Power Management
+#define SATA_STATUS_DET_PRESENT   0x03  // Device Present and Established Communication
+#define SATA_STATUS_IPM_ACTIVE    0x100 // Active State
 
 /* Check if the compiler thinks we are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -92,7 +99,7 @@ void timer_handler();
 void init_pic();
 void init_pit();
 void init_keyboard();
-void cmd_help();
+void kernel_help();
 void cmd_clear();
 void cmd_hello();
 void process_command();
@@ -153,17 +160,6 @@ char* strcpy(char* dest, const char* src) {
     return original_dest;
 }
 
-/* String comparison */
-bool strcmp(const char* s1, const char* s2) {
-    while (*s1 && *s2) {
-        if (*s1 != *s2) {
-            return false;
-        }
-        s1++;
-        s2++;
-    }
-    return *s1 == *s2;
-}
 
 /* Integer to string conversion */
 void itoa(int value, char* str, int base) {
@@ -809,7 +805,7 @@ int command_length = 0;
 bool command_ready = false;
 
 // Function prototypes for command handlers
-void cmd_help();
+void kernel_help();
 void cmd_clear();
 void cmd_hello();
 void cmd_time(); // New command for displaying time info
@@ -883,7 +879,7 @@ void process_command() {
     
     // Check against known commands
     if (strcmp(command_buffer, "help")) {
-        cmd_help();
+        kernel_help();
     } else if (strcmp(command_buffer, "clear")) {
         cmd_clear();
     } else if (strcmp(command_buffer, "hello")) {
@@ -896,7 +892,7 @@ void process_command() {
 }
 
 /* Command implementations */
-void cmd_help() {
+void kernel_help() {
     printf("Available commands:\n");
     printf("  help  - Show this help message\n");
     printf("  clear - Clear the screen\n");
@@ -911,6 +907,19 @@ void cmd_hello() {
     printf("Hello, user!\n");
 }
 
+
+
+
+
+
+
+
+
+#include "tpm.h" 
+
+
+
+
 /* Modified kernel_main function */
 void kernel_main() {
     /* Initialize terminal interface */
@@ -923,9 +932,9 @@ void kernel_main() {
     
     /* Initialize the real-time clock */
     init_rtc();
-	
-    enumerate_pci_devices();	
 
+    tpm_init();
+	tpm_secure_text_example("This is a secret message stored securely in the TPM.");
 	printf("Initialization complete. Start typing commands...\n");
 
     /* Display initial prompt */

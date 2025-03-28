@@ -1,17 +1,10 @@
 
-
 #include <stdbool.h> /* C doesn't have booleans by default. */
 #include <stddef.h>
 #include <stdint.h>
 #include "hardware_specs.h"
 #include "io.h"
 #include "stdio.h"
-#include "pci_admin.h"
-
-#define SATA_STATUS_DET_MASK      0x0F  // Device Detection
-#define SATA_STATUS_IPM_MASK      0xF00 // Interface Power Management
-#define SATA_STATUS_DET_PRESENT   0x03  // Device Present and Established Communication
-#define SATA_STATUS_IPM_ACTIVE    0x100 // Active State
 
 /* Check if the compiler thinks we are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -99,7 +92,7 @@ void timer_handler();
 void init_pic();
 void init_pit();
 void init_keyboard();
-void kernel_help();
+void cmd_help();
 void cmd_clear();
 void cmd_hello();
 void process_command();
@@ -816,7 +809,7 @@ int command_length = 0;
 bool command_ready = false;
 
 // Function prototypes for command handlers
-void kernel_help();
+void cmd_help();
 void cmd_clear();
 void cmd_hello();
 void cmd_time(); // New command for displaying time info
@@ -890,7 +883,7 @@ void process_command() {
     
     // Check against known commands
     if (strcmp(command_buffer, "help")) {
-        kernel_help();
+        cmd_help();
     } else if (strcmp(command_buffer, "clear")) {
         cmd_clear();
     } else if (strcmp(command_buffer, "hello")) {
@@ -903,7 +896,7 @@ void process_command() {
 }
 
 /* Command implementations */
-void kernel_help() {
+void cmd_help() {
     printf("Available commands:\n");
     printf("  help  - Show this help message\n");
     printf("  clear - Clear the screen\n");
@@ -931,8 +924,8 @@ void kernel_main() {
     /* Initialize the real-time clock */
     init_rtc();
 	
-    // List NVMe devices
-    test_pci_admin_commands();
+    enumerate_pci_devices();	
+
 	printf("Initialization complete. Start typing commands...\n");
 
     /* Display initial prompt */

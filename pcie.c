@@ -184,7 +184,10 @@ void list_nvme_devices() {
                     // Initialize this NVMe device
                     initialize_nvme_device(bus, device, function);
 
-                    //write to nvme here
+                    //Write to nvme here
+                    nvme_read_write_test(bus, device, function);
+
+
                     printf("NVMe initialization complete\n");
                     
                     
@@ -327,17 +330,208 @@ void nvme_read_write_test(uint8_t bus, uint8_t device, uint8_t function) {
     if (csts & 0x1) {
         printf("Controller is ready.\n");
         
-        // In a real implementation, you would:
         // 1. Set up memory for data buffers
-        // 2. Create PRPs (Physical Region Pages) for the data transfer
-        // 3. Create a submission queue entry for the read/write command
-        // 4. Ring the doorbell to submit the command
-        // 5. Wait for completion and check status
+        void *read_buffer = malloc(4096);
+        void *write_buffer = malloc(4096);
+        if (!read_buffer || !write_buffer) {
+            printf("Failed to allocate memory for data buffers\n");
+            if (read_buffer) free(read_buffer);
+            if (write_buffer) free(write_buffer);
+            return;
+        }
         
-        printf("Simulated 4KB read test: Successful\n");
-        printf("Simulated 4KB write test: Successful\n");
-    } else {
-        printf("Controller is not ready, cannot perform read/write test.\n");
+        // Initialize write buffer with test pattern
+        for (int i = 0; i < 4096; i++) {
+            ((uint8_t *)write_buffer)[i] = i & 0xFF;
+        }
+        
+        // 2. Create PRPs (Physical Region Pages) for the data transfer
+        uint64_t read_prp_addr = (uint64_t)read_buffer;
+        uint64_t write_prp_addr = (uint64_t)write_buffer;
+        uint64_t read_prp_list[2] = {read_prp_addr, 0};
+        uint64_t write_prp_list[2] = {write_prp_addr, 0};
+        
+        // 3. Define necessary structs and constants
+        #define NVME_CMD_READ 0x02
+        #define NVME_CMD_WRITE 0x01
+        #define NVME_CQE_STATUS_P 0x1
+        #define PCI_CONFIG_ADDRESS 0xCF8
+        #define PCI_CONFIG_DATA 0xCFC
+        
+        // Inline implementation of pci_config_read32
+        uint32_t pci_addr = (1U << 31) | (bus << 16) | (device << 11) | (function << 8) | (0x10 & 0xFC);
+        outl(PCI_CONFIG_ADDRESS, pci_addr);
+        uint32_t bar0_addr_low = inl(PCI_CONFIG_DATA);
+        
+        pci_addr = (1U << 31) | (bus << 16) | (device << 11) | (function << 8) | (0x14 & 0xFC);
+        outl(PCI_CONFIG_ADDRESS, pci_addr);
+        uint32_t bar0_addr_high = inl(PCI_CONFIG_DATA);
+        
+        uint64_t bar0_addr = ((uint64_t)bar0_addr_high << 32) | (bar0_addr_low & ~0xF);
+        
+        // Calculate doorbell register offsets
+        uint32_t cap_offset = 0;  // Capability register offset in BAR0
+        uint32_t cap_low = *(volatile uint32_t *)(bar0_addr + cap_offset);
+        uint32_t cap_high = *(volatile uint32_t *)(bar0_addr + cap_offset + 4);
+        uint64_t cap = ((uint64_t)cap_high << 32) | cap_low;
+        
+        uint32_t dstrd = (cap >> 32) & 0xF;  // Doorbell stride
+        uint32_t db_offset = 0x1000;  // Base doorbell offset
+        
+        // Calculate admin queue doorbell addresses
+        volatile uint32_t *doorbell_reg = (volatile uint32_t *)(bar0_addr + db_offset + (0 * (4 << dstrd)));
+        volatile uint32_t *cq_doorbell_reg = (volatile uint32_t *)(bar0_addr + db_offset + (1 * (4 << dstrd)));
+        
+        struct nvme_rw_command {
+            uint8_t opcode;
+            uint8_t flags;
+            uint16_t command_id;
+            uint32_t nsid;
+            uint64_t reserved1;
+            uint64_t slba;
+            uint16_t length;
+            uint16_t control;
+            uint32_t dsmgmt;
+            uint64_t prp1;
+            uint64_t prp2;
+        };
+        
+        struct nvme_command {
+            struct nvme_rw_command rw;
+        };
+        
+        struct nvme_completion {
+            uint32_t result;
+            uint32_t reserved;
+            uint16_t sq_head;
+            uint16_t sq_id;
+            uint16_t command_id;
+            uint16_t status;
+        };
+        
+        // Define queue parameters based on controller capabilities
+        uint16_t sq_size = 64;
+        uint16_t cq_size = 64;
+        uint16_t sq_tail = 0;
+        uint16_t cq_head = 0;
+        
+        struct nvme_command *sq_entry = malloc(sq_size * sizeof(struct nvme_command));
+        struct nvme_completion *cq_entry = malloc(cq_size * sizeof(struct nvme_completion));
+        
+        if (!sq_entry || !cq_entry) {
+            printf("Failed to allocate memory for queues\n");
+            if (read_buffer) free(read_buffer);
+            if (write_buffer) free(write_buffer);
+            if (sq_entry) free(sq_entry);
+            if (cq_entry) free(cq_entry);
+            return;
+        }
+        
+        // Inline implementation of writel, inl, and outl functions
+        void writel(uint32_t value, volatile uint32_t *addr) {
+            *addr = value;
+        }
+        
+        void outl(uint16_t port, uint32_t value) {
+            asm volatile("outl %0, %1" : : "a"(value), "Nd"(port));
+        }
+        
+        uint32_t inl(uint16_t port) {
+            uint32_t value;
+            asm volatile("inl %1, %0" : "=a"(value) : "Nd"(port));
+            return value;
+        }
+        
+        // First perform the write operation
+        struct nvme_command write_cmd;
+        memset(&write_cmd, 0, sizeof(write_cmd));
+        write_cmd.rw.opcode = NVME_CMD_WRITE;
+        write_cmd.rw.nsid = 1;  // Use namespace 1
+        write_cmd.rw.prp1 = write_prp_list[0];
+        write_cmd.rw.prp2 = write_prp_list[1];
+        write_cmd.rw.slba = 0;  // Start at LBA 0
+        write_cmd.rw.length = 0;  // 0-based, so 0 means 1 block (4KB)
+        write_cmd.rw.control = 0;
+        write_cmd.rw.command_id = 1;
+        
+        // Submit the write command
+        sq_tail = (sq_tail + 1) % sq_size;
+        sq_entry[sq_tail] = write_cmd;
+        writel(sq_tail, doorbell_reg);
+        
+        // Wait for write completion
+        struct nvme_completion write_cqe;
+        memset(&write_cqe, 0, sizeof(write_cqe));
+        while (!(write_cqe.status & NVME_CQE_STATUS_P)) {
+            write_cqe = cq_entry[cq_head];
+            if (write_cqe.status & NVME_CQE_STATUS_P) {
+                cq_head = (cq_head + 1) % cq_size;
+                writel(cq_head, cq_doorbell_reg);
+                break;
+            }
+            // Add a small delay to avoid busy-waiting
+            usleep(1000);
+        }
+        
+        if ((write_cqe.status >> 1) != 0) {
+            printf("Write command failed with status: 0x%x\n", write_cqe.status >> 1);
+        } else {
+            printf("4KB write test: Successful\n");
+            
+            // Now perform the read operation
+            struct nvme_command read_cmd;
+            memset(&read_cmd, 0, sizeof(read_cmd));
+            read_cmd.rw.opcode = NVME_CMD_READ;
+            read_cmd.rw.nsid = 1;
+            read_cmd.rw.prp1 = read_prp_list[0];
+            read_cmd.rw.prp2 = read_prp_list[1];
+            read_cmd.rw.slba = 0;  // Read from the same LBA we wrote to
+            read_cmd.rw.length = 0;
+            read_cmd.rw.control = 0;
+            read_cmd.rw.command_id = 2;
+            
+            // Submit the read command
+            sq_tail = (sq_tail + 1) % sq_size;
+            sq_entry[sq_tail] = read_cmd;
+            writel(sq_tail, doorbell_reg);
+            
+            // Wait for read completion
+            struct nvme_completion read_cqe;
+            memset(&read_cqe, 0, sizeof(read_cqe));
+            while (!(read_cqe.status & NVME_CQE_STATUS_P)) {
+                read_cqe = cq_entry[cq_head];
+                if (read_cqe.status & NVME_CQE_STATUS_P) {
+                    cq_head = (cq_head + 1) % cq_size;
+                    writel(cq_head, cq_doorbell_reg);
+                    break;
+                }
+                usleep(1000);
+            }
+            
+            if ((read_cqe.status >> 1) != 0) {
+                printf("Read command failed with status: 0x%x\n", read_cqe.status >> 1);
+            } else {
+                // Verify the data read matches what was written
+                int data_verified = 1;
+                for (int i = 0; i < 4096; i++) {
+                    if (((uint8_t *)read_buffer)[i] != ((uint8_t *)write_buffer)[i]) {
+                        data_verified = 0;
+                        printf("Data verification failed at offset %d\n", i);
+                        break;
+                    }
+                }
+                
+                if (data_verified) {
+                    printf("4KB read test: Successful\n");
+                }
+            }
+        }
+        
+        // Free allocated memory
+        free(read_buffer);
+        free(write_buffer);
+        free(sq_entry);
+        free(cq_entry);
     }
 }
 

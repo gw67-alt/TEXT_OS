@@ -4,7 +4,7 @@
 #include <dirent.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include "io.h"
+#include <stdio.h>
 #include "pcie.h"
 
 
@@ -302,8 +302,6 @@ void initialize_nvme_device(uint8_t bus, uint8_t device, uint8_t function) {
     
     printf("NVMe device initialization complete.\n");
     
-    // Perform read/write test
-    nvme_read_write_test(bus, device, function);
 }
 
 /* Read/Write test on NVMe device */
@@ -426,7 +424,7 @@ void nvme_read_write_test(uint8_t bus, uint8_t device, uint8_t function) {
             if (cq_entry) free(cq_entry);
             return;
         }
-        
+        /*
         // Inline implementation of writel, inl, and outl functions
         void writel(uint32_t value, volatile uint32_t *addr) {
             *addr = value;
@@ -526,13 +524,14 @@ void nvme_read_write_test(uint8_t bus, uint8_t device, uint8_t function) {
                 }
             }
         }
-        
+    */
         // Free allocated memory
         free(read_buffer);
         free(write_buffer);
-        free(sq_entry);
-        free(cq_entry);
+        //free(sq_entry);
+        //free(cq_entry);
     }
+      
 }
 
 /* Main PCIe test function */

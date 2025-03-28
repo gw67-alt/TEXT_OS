@@ -424,21 +424,13 @@ void nvme_read_write_test(uint8_t bus, uint8_t device, uint8_t function) {
             if (cq_entry) free(cq_entry);
             return;
         }
-        /*
+        
         // Inline implementation of writel, inl, and outl functions
         void writel(uint32_t value, volatile uint32_t *addr) {
             *addr = value;
         }
         
-        void outl(uint16_t port, uint32_t value) {
-            asm volatile("outl %0, %1" : : "a"(value), "Nd"(port));
-        }
-        
-        uint32_t inl(uint16_t port) {
-            uint32_t value;
-            asm volatile("inl %1, %0" : "=a"(value) : "Nd"(port));
-            return value;
-        }
+       
         
         // First perform the write operation
         struct nvme_command write_cmd;
@@ -524,7 +516,7 @@ void nvme_read_write_test(uint8_t bus, uint8_t device, uint8_t function) {
                 }
             }
         }
-    */
+    
         // Free allocated memory
         free(read_buffer);
         free(write_buffer);

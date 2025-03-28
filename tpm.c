@@ -13,7 +13,423 @@
  
  // TPM 2.0 register addresses (assuming memory-mapped I/O)
  // These addresses may vary depending on the hardware implementation
- #define TPM_BASE_ADDR          0xFED40000  // Standard memory-mapped base address for TPM
+
+
+
+
+
+
+
+
+
+
+/**
+ * TPM Base Address Detection for Bare Metal x86
+ * 
+ * This implementation provides functionality to automatically detect
+ * the memory-mapped I/O base address of a TPM 2.0 device on x86 hardware.
+ */
+ #include <stdint.h>
+ #include <stdbool.h>
+ #include "stdio.h"
+ 
+ // PCI Configuration Space registers
+ #define PCI_CONFIG_ADDRESS     0xCF8
+ #define PCI_CONFIG_DATA        0xCFC
+ 
+ // PCI registers
+ #define PCI_VENDOR_ID          0x00
+ #define PCI_DEVICE_ID          0x02
+ #define PCI_COMMAND            0x04
+ #define PCI_CLASS_REV          0x08
+ #define PCI_BAR0               0x10
+ #define PCI_BAR1               0x14
+ 
+ // TPM PCI Device IDs
+ #define TPM_PCI_VENDOR_ID_IFX         0x1279  // Infineon
+ #define TPM_PCI_VENDOR_ID_INTEL       0x8086  // Intel
+ #define TPM_PCI_VENDOR_ID_NUVOTON     0x1050  // Nuvoton
+ #define TPM_PCI_VENDOR_ID_IBM         0x1014  // IBM
+ #define TPM_PCI_VENDOR_ID_WINBOND     0x1050  // Winbond (same as Nuvoton)
+ #define TPM_PCI_VENDOR_ID_STM         0x104A  // STMicroelectronics
+ #define TPM_PCI_VENDOR_ID_NATIONTECH  0x1B4E  // Nationtech
+ 
+ // TPM Interface types
+ #define TPM_INTERFACE_TIS      0
+ #define TPM_INTERFACE_FIFO     1
+ #define TPM_INTERFACE_CRB      2
+ 
+ // ACPI related information
+ #define ACPI_RSDP_SIGNATURE    "RSD PTR "
+ #define ACPI_RSDP_SIG_SIZE     8
+ #define ACPI_RSDT_SIGNATURE    "RSDT"
+ #define ACPI_XSDT_SIGNATURE    "XSDT"
+ #define ACPI_TCPA_SIGNATURE    "TCPA"  // For TPM 1.2
+ #define ACPI_TPM2_SIGNATURE    "TPM2"  // For TPM 2.0
+ 
+ // Default TPM Base Addresses to try if detection fails
+ #define TPM_DEFAULT_BASE_ADDR  0xFED40000  // Most common base address
+ #define TPM_ALT_BASE_ADDR_1    0xFED45000  // Alternative address sometimes used
+ #define TPM_ALT_BASE_ADDR_2    0xFED4A000  // Another alternative address
+ 
+ // Function declarations
+ uint32_t detect_tpm_base_address(void);
+ uint32_t find_tpm_pci_device(void);
+ uint32_t find_tpm_acpi_device(void);
+ uint32_t test_tpm_address(uint32_t addr);
+ uint32_t read_pci_config(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
+ void write_pci_config(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value);
+ 
+ // Memory-mapped I/O functions (same as in the original code)
+ static inline void mmio_write32(uint32_t addr, uint32_t val) {
+     *((volatile uint32_t*)addr) = val;
+ }
+ 
+ static inline uint32_t mmio_read32(uint32_t addr) {
+     return *((volatile uint32_t*)addr);
+ }
+ 
+ static inline void mmio_write8(uint32_t addr, uint8_t val) {
+     *((volatile uint8_t*)addr) = val;
+ }
+ 
+ static inline uint8_t mmio_read8(uint32_t addr) {
+     return *((volatile uint8_t*)addr);
+ }
+ 
+ // Access PCI Configuration Space
+ uint32_t read_pci_config(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset) {
+     uint32_t address = (uint32_t)((bus << 16) | (device << 11) | (function << 8) | 
+                                   (offset & 0xFC) | 0x80000000);
+     outl(PCI_CONFIG_ADDRESS, address);
+     return inl(PCI_CONFIG_DATA);
+ }
+ 
+ void write_pci_config(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value) {
+     uint32_t address = (uint32_t)((bus << 16) | (device << 11) | (function << 8) | 
+                                   (offset & 0xFC) | 0x80000000);
+     outl(PCI_CONFIG_ADDRESS, address);
+     outl(PCI_CONFIG_DATA, value);
+ }
+ 
+ // Check if a potential address responds like a TPM device
+ uint32_t test_tpm_address(uint32_t addr) {
+     // Test if address is accessible by trying to read from it
+     uint8_t access;
+     
+     // First check: Try to read TPM_ACCESS register
+     // If not accessible, this will likely cause a hardware exception which should be caught
+     // by the calling code (implement protection as appropriate for your environment)
+     
+     // Adding simple validation check
+     if (addr < 0xF0000000 || addr > 0xFFFFFFFF) {
+         return 0; // Invalid address range for memory-mapped TPM
+     }
+     
+     // First safely check if we can read from the address
+     // This is a simple check, but a real implementation would need more robust protection
+
+    access = mmio_read8(addr);
+         
+    // If we can read, let's check if it looks like a TPM device
+    // Most TPM devices have TPM_ACCESS_VALID bit (0x80) set in the access register
+    if (access & 0x80) {
+        // Additional validation: try to read the TIS interface ID register
+        uint32_t interfaceId = mmio_read32(addr + 0x30);
+             
+        // Check if interface ID has reasonable values
+        // TPM 2.0 devices typically have interface ID with specific bits set
+        if ((interfaceId & 0xFFFF0000) != 0) {
+            return addr; // Looks like a valid TPM device
+            }
+             
+        // If interface ID check failed, we might still have a TPM
+        // but let's mark it as lower confidence
+        return addr;
+        }
+        return 0; // Not a valid TPM
+
+     } 
+ 
+ // Scan PCI bus for TPM devices
+ uint32_t find_tpm_pci_device(void) {
+     uint16_t vendor_id, device_id;
+     uint32_t class_rev, bar0;
+     uint32_t address = 0;
+     
+     // Scan PCI bus for devices
+     for (uint8_t bus = 0; bus < 256; bus++) {
+         for (uint8_t device = 0; device < 32; device++) {
+             for (uint8_t function = 0; function < 8; function++) {
+                 // Read Vendor ID
+                 uint32_t vendor = read_pci_config(bus, device, function, PCI_VENDOR_ID);
+                 vendor_id = vendor & 0xFFFF;
+                 device_id = (vendor >> 16) & 0xFFFF;
+                 
+                 // Check if valid device exists at this location
+                 if (vendor_id == 0xFFFF) {
+                     continue; // No device here
+                 }
+                 
+                 // Check for known TPM vendors
+                 bool is_tpm_vendor = false;
+                 switch (vendor_id) {
+                     case TPM_PCI_VENDOR_ID_IFX:
+                     case TPM_PCI_VENDOR_ID_INTEL:
+                     case TPM_PCI_VENDOR_ID_NUVOTON:
+                     case TPM_PCI_VENDOR_ID_IBM:
+                     case TPM_PCI_VENDOR_ID_STM:
+                     case TPM_PCI_VENDOR_ID_NATIONTECH:
+                         is_tpm_vendor = true;
+                         break;
+                     default:
+                         // Read class code to check if it's a TPM device
+                         class_rev = read_pci_config(bus, device, function, PCI_CLASS_REV);
+                         uint8_t class_code = (class_rev >> 24) & 0xFF;
+                         uint8_t subclass = (class_rev >> 16) & 0xFF;
+                         
+                         // TPM devices often have class code 0x0C (Serial bus controller)
+                         // and subclass 0x05 (TPM)
+                         if (class_code == 0x0C && subclass == 0x05) {
+                             is_tpm_vendor = true;
+                         }
+                         break;
+                 }
+                 
+                 if (is_tpm_vendor) {
+                     // We found a potential TPM device, get its base address
+                     printf("Found potential TPM device: Vendor=0x%04X, Device=0x%04X at bus %d, device %d, function %d\n",
+                            vendor_id, device_id, bus, device, function);
+                     
+                     // Check if memory-mapped I/O is enabled
+                     uint16_t command = read_pci_config(bus, device, function, PCI_COMMAND) & 0xFFFF;
+                     if (!(command & 0x02)) {
+                         // Memory space not enabled, try to enable it
+                         write_pci_config(bus, device, function, PCI_COMMAND, command | 0x02);
+                     }
+                     
+                     // Read BAR0 which usually contains the TPM base address
+                     bar0 = read_pci_config(bus, device, function, PCI_BAR0);
+                     
+                     // Check if BAR0 is memory-mapped (bit 0 clear)
+                     if (!(bar0 & 0x01)) {
+                         // Memory-mapped BAR, get the address (mask off the low bits)
+                         address = bar0 & 0xFFFFFFF0;
+                         
+                         // Test if this address actually responds like a TPM
+                         if (test_tpm_address(address)) {
+                             return address;
+                         }
+                     }
+                     
+                     // Also check BAR1 as some TPMs use it
+                     uint32_t bar1 = read_pci_config(bus, device, function, PCI_BAR1);
+                     if (!(bar1 & 0x01)) {
+                         address = bar1 & 0xFFFFFFF0;
+                         if (test_tpm_address(address)) {
+                             return address;
+                         }
+                     }
+                 }
+             }
+         }
+     }
+     
+     return 0; // No TPM PCI device found
+ }
+ 
+ // Find ACPI RSDP (Root System Description Pointer)
+ uint64_t find_acpi_rsdp(void) {
+     uint64_t rsdp_addr = 0;
+     uint8_t* search_addr;
+     
+     // First search the EBDA (Extended BIOS Data Area)
+     uint16_t* ebda_ptr = (uint16_t*)0x40E;
+     uint32_t ebda_addr = ((uint32_t)*ebda_ptr) << 4;
+     
+     // Search first 1KB of EBDA
+     if (ebda_addr > 0x80000 && ebda_addr < 0xA0000) {
+         for (search_addr = (uint8_t*)ebda_addr; search_addr < (uint8_t*)(ebda_addr + 1024); search_addr += 16) {
+             if (memcmp(search_addr, ACPI_RSDP_SIGNATURE, ACPI_RSDP_SIG_SIZE) == 0) {
+                 return (uint64_t)((uintptr_t)search_addr);
+             }
+         }
+     }
+     
+     // Then search the BIOS memory area between 0xE0000 and 0xFFFFF
+     for (search_addr = (uint8_t*)0xE0000; search_addr < (uint8_t*)0xFFFFF; search_addr += 16) {
+         if (memcmp(search_addr, ACPI_RSDP_SIGNATURE, ACPI_RSDP_SIG_SIZE) == 0) {
+             return (uint64_t)((uintptr_t)search_addr);
+         }
+     }
+     
+     return 0; // RSDP not found
+ }
+ 
+ // Validate checksum of an ACPI table
+ bool validate_acpi_checksum(uint8_t* table, uint32_t length) {
+     uint8_t sum = 0;
+     for (uint32_t i = 0; i < length; i++) {
+         sum += table[i];
+     }
+     return (sum == 0);
+ }
+ 
+ // Find TPM through ACPI tables
+ uint32_t find_tpm_acpi_device(void) {
+     uint64_t rsdp_addr = find_acpi_rsdp();
+     if (!rsdp_addr) {
+         printf("ACPI RSDP not found\n");
+         return 0;
+     }
+     
+     printf("Found ACPI RSDP at 0x%llX\n", rsdp_addr);
+     
+     // Check ACPI version (RSDP structure differs based on version)
+     uint8_t revision = *((uint8_t*)(rsdp_addr + 15));
+     uint32_t rsdt_addr;
+     uint64_t xsdt_addr;
+     
+     if (revision == 0) {
+         // ACPI 1.0 - use RSDT
+         rsdt_addr = *((uint32_t*)(rsdp_addr + 16));
+         if (!rsdt_addr) {
+             return 0;
+         }
+         
+         // Validate RSDT signature
+         if (memcmp((void*)rsdt_addr, ACPI_RSDT_SIGNATURE, 4) != 0) {
+             printf("Invalid RSDT signature\n");
+             return 0;
+         }
+         
+         // Get table length and entries
+         uint32_t rsdt_length = *((uint32_t*)(rsdt_addr + 4));
+         uint32_t entries = (rsdt_length - 36) / 4; // 36 is the header size
+         
+         // Search for TPM table
+         for (uint32_t i = 0; i < entries; i++) {
+             uint32_t table_addr = *((uint32_t*)(rsdt_addr + 36 + i * 4));
+             
+             // Check if this is a TPM table
+             if (memcmp((void*)table_addr, ACPI_TCPA_SIGNATURE, 4) == 0 ||
+                 memcmp((void*)table_addr, ACPI_TPM2_SIGNATURE, 4) == 0) {
+                 
+                 // Found a TPM table, extract base address
+                 // For TPM 2.0 (TPM2 table), the base address is typically at offset 48
+                 if (memcmp((void*)table_addr, ACPI_TPM2_SIGNATURE, 4) == 0) {
+                     // TPM 2.0 table - extract control area address
+                     uint32_t tpm_base = *((uint32_t*)(table_addr + 48));
+                     if (test_tpm_address(tpm_base)) {
+                         return tpm_base;
+                     }
+                 } 
+                 // For TPM 1.2 (TCPA table), the base address is at a different offset
+                 else if (memcmp((void*)table_addr, ACPI_TCPA_SIGNATURE, 4) == 0) {
+                     // TPM 1.2 table - extract address
+                     uint32_t tpm_base = *((uint32_t*)(table_addr + 40));
+                     if (test_tpm_address(tpm_base)) {
+                         return tpm_base;
+                     }
+                 }
+             }
+         }
+     } else {
+         // ACPI 2.0+ - use XSDT
+         xsdt_addr = *((uint64_t*)(rsdp_addr + 24));
+         if (!xsdt_addr) {
+             return 0;
+         }
+         
+         // Validate XSDT signature
+         if (memcmp((void*)xsdt_addr, ACPI_XSDT_SIGNATURE, 4) != 0) {
+             printf("Invalid XSDT signature\n");
+             return 0;
+         }
+         
+         // Get table length and entries
+         uint32_t xsdt_length = *((uint32_t*)(xsdt_addr + 4));
+         uint32_t entries = (xsdt_length - 36) / 8; // 36 is the header size
+         
+         // Search for TPM table
+         for (uint32_t i = 0; i < entries; i++) {
+             uint64_t table_addr = *((uint64_t*)(xsdt_addr + 36 + i * 8));
+             
+             // Check if this is a TPM table
+             if (memcmp((void*)table_addr, ACPI_TCPA_SIGNATURE, 4) == 0 ||
+                 memcmp((void*)table_addr, ACPI_TPM2_SIGNATURE, 4) == 0) {
+                 
+                 // Found a TPM table, extract base address
+                 if (memcmp((void*)table_addr, ACPI_TPM2_SIGNATURE, 4) == 0) {
+                     // TPM 2.0 table - extract control area address
+                     uint32_t tpm_base = *((uint32_t*)(table_addr + 48));
+                     if (test_tpm_address(tpm_base)) {
+                         return tpm_base;
+                     }
+                 } else if (memcmp((void*)table_addr, ACPI_TCPA_SIGNATURE, 4) == 0) {
+                     // TPM 1.2 table - extract address
+                     uint32_t tpm_base = *((uint32_t*)(table_addr + 40));
+                     if (test_tpm_address(tpm_base)) {
+                         return tpm_base;
+                     }
+                 }
+             }
+         }
+     }
+     
+     return 0; // TPM not found in ACPI tables
+ }
+ 
+ // Main function to detect TPM base address
+ uint32_t detect_tpm_base_address(void) {
+     uint32_t tpm_base = 0;
+     
+     printf("Detecting TPM base address...\n");
+     
+     // First try PCI detection
+     tpm_base = find_tpm_pci_device();
+     if (tpm_base) {
+         printf("TPM found via PCI at address 0x%08X\n", tpm_base);
+         return tpm_base;
+     }
+     
+     // If not found via PCI, try ACPI tables
+     tpm_base = find_tpm_acpi_device();
+     if (tpm_base) {
+         printf("TPM found via ACPI at address 0x%08X\n", tpm_base);
+         return tpm_base;
+     }
+     
+     // If still not found, try known common addresses
+     printf("TPM not found via PCI or ACPI, trying known addresses...\n");
+     
+     // Try the most common TPM address first
+     tpm_base = test_tpm_address(TPM_DEFAULT_BASE_ADDR);
+     if (tpm_base) {
+         printf("TPM found at default address 0x%08X\n", tpm_base);
+         return tpm_base;
+     }
+     
+     // Try alternative addresses
+     tpm_base = test_tpm_address(TPM_ALT_BASE_ADDR_1);
+     if (tpm_base) {
+         printf("TPM found at alternative address 0x%08X\n", tpm_base);
+         return tpm_base;
+     }
+     
+     tpm_base = test_tpm_address(TPM_ALT_BASE_ADDR_2);
+     if (tpm_base) {
+         printf("TPM found at alternative address 0x%08X\n", tpm_base);
+         return tpm_base;
+     }
+     
+     // If we get here, no TPM was found
+     printf("No TPM device detected. Using default address 0x%08X\n", TPM_DEFAULT_BASE_ADDR);
+     return TPM_DEFAULT_BASE_ADDR;
+ }
+
+
+ #define TPM_BASE_ADDR detect_tpm_base_address()  // Standard memory-mapped base address for TPM
  #define TPM_ACCESS_REG         (TPM_BASE_ADDR + 0x00)
  #define TPM_INT_ENABLE_REG     (TPM_BASE_ADDR + 0x08)
  #define TPM_INT_VECTOR_REG     (TPM_BASE_ADDR + 0x0C)
@@ -95,23 +511,6 @@
  bool tpm_store_secure_data(const char* label, uint8_t* data, uint16_t dataSize);
  bool tpm_retrieve_secure_data(const char* label, uint8_t* data, uint16_t* dataSize);
  void tpm_secure_storage_example(void);
- 
- // Memory-mapped I/O functions
- static inline void mmio_write32(uint32_t addr, uint32_t val) {
-     *((volatile uint32_t*)addr) = val;
- }
- 
- static inline uint32_t mmio_read32(uint32_t addr) {
-     return *((volatile uint32_t*)addr);
- }
- 
- static inline void mmio_write8(uint32_t addr, uint8_t val) {
-     *((volatile uint8_t*)addr) = val;
- }
- 
- static inline uint8_t mmio_read8(uint32_t addr) {
-     return *((volatile uint8_t*)addr);
- }
  
  // Basic delay function - used to give TPM time to process
  static void tpm_delay(uint32_t cycles) {

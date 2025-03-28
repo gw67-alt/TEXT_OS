@@ -8,7 +8,8 @@
 
  #include <stdint.h>
  #include <stdbool.h>
- #include <string.h>
+ #include "stdio.h"
+ #include "io.h"
  
  // TPM 2.0 register addresses (assuming memory-mapped I/O)
  // These addresses may vary depending on the hardware implementation
@@ -74,14 +75,6 @@
  // Maximum data size for TPM operations
  #define TPM_MAX_DATA_SIZE      1024
  
- // Debug macros
- #if defined(DEBUG_TPM)
- extern void printf(const char* format, ...);
- #define DEBUG_PRINT(fmt, ...) printf(fmt, ##__VA_ARGS__)
- #else
- #define DEBUG_PRINT(fmt, ...)
- #endif
- 
  // Function declarations
  bool tpm_wait_for_status(uint32_t mask, uint32_t expected);
  bool tpm_set_locality(uint8_t locality);
@@ -102,27 +95,6 @@
  bool tpm_store_secure_data(const char* label, uint8_t* data, uint16_t dataSize);
  bool tpm_retrieve_secure_data(const char* label, uint8_t* data, uint16_t* dataSize);
  void tpm_secure_storage_example(void);
- 
- // I/O port functions for x86
- static inline void outb(uint16_t port, uint8_t val) {
-     __asm__ volatile("outb %0, %1" : : "a"(val), "Nd"(port));
- }
- 
- static inline uint8_t inb(uint16_t port) {
-     uint8_t ret;
-     __asm__ volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
-     return ret;
- }
- 
- static inline void outl(uint16_t port, uint32_t val) {
-     __asm__ volatile("outl %0, %1" : : "a"(val), "Nd"(port));
- }
- 
- static inline uint32_t inl(uint16_t port) {
-     uint32_t ret;
-     __asm__ volatile("inl %1, %0" : "=a"(ret) : "Nd"(port));
-     return ret;
- }
  
  // Memory-mapped I/O functions
  static inline void mmio_write32(uint32_t addr, uint32_t val) {
@@ -163,14 +135,14 @@
          tpm_delay(100); // Short delay between checks
      }
      
-     DEBUG_PRINT("TPM status timeout. Expected: 0x%x, Last status: 0x%x\n", expected, status);
+     printf("TPM status timeout. Expected: 0x%x, Last status: 0x%x\n", expected, status);
      return false;
  }
  
  // Set the TPM locality
  bool tpm_set_locality(uint8_t locality) {
      if (locality > TPM_LOCALITY_4) {
-         DEBUG_PRINT("Invalid locality: %d\n", locality);
+         printf("Invalid locality: %d\n", locality);
          return false;
      }
      
@@ -196,7 +168,7 @@
          tpm_delay(100);
      }
      
-     DEBUG_PRINT("Failed to set locality %d\n", locality);
+     printf("Failed to set locality %d\n", locality);
      return false;
  }
  
@@ -206,7 +178,7 @@
      
      // Set to locality 0
      if (!tpm_set_locality(TPM_LOCALITY_0)) {
-         DEBUG_PRINT("Failed to set locality\n");
+         printf("Failed to set locality\n");
          return false;
      }
      
@@ -231,7 +203,7 @@
              
              // Wait for command ready
              if (!tpm_wait_for_status(TPM_STS_COMMAND_READY, TPM_STS_COMMAND_READY)) {
-                 DEBUG_PRINT("TPM not ready for commands\n");
+                 printf("TPM not ready for commands\n");
                  return false;
              }
              
@@ -241,7 +213,7 @@
          tpm_delay(100);
      }
      
-     DEBUG_PRINT("TPM initialization timeout\n");
+     printf("TPM initialization timeout\n");
      return false;
  }
  
@@ -253,7 +225,7 @@
      
      // Wait for TPM to be ready to receive command
      if (!tpm_wait_for_status(TPM_STS_COMMAND_READY, TPM_STS_COMMAND_READY)) {
-         DEBUG_PRINT("TPM not ready for command\n");
+         printf("TPM not ready for command\n");
          return false;
      }
      
@@ -274,7 +246,7 @@
          
          // Wait for data to be accepted
          if (!tpm_wait_for_status(TPM_STS_VALID, TPM_STS_VALID)) {
-             DEBUG_PRINT("TPM did not accept data\n");
+             printf("TPM did not accept data\n");
              return false;
          }
      }
@@ -285,7 +257,7 @@
      
      // Wait for TPM to process command
      if (!tpm_wait_for_status(TPM_STS_DATA_AVAIL, TPM_STS_DATA_AVAIL)) {
-         DEBUG_PRINT("TPM command processing timeout\n");
+         printf("TPM command processing timeout\n");
          return false;
      }
      
@@ -300,7 +272,7 @@
      
      // Wait for data to be available
      if (!tpm_wait_for_status(TPM_STS_DATA_AVAIL, TPM_STS_DATA_AVAIL)) {
-         DEBUG_PRINT("TPM no data available\n");
+         printf("TPM no data available\n");
          return false;
      }
      
@@ -360,19 +332,19 @@
      
      // Send the command
      if (!tpm_send_command(cmd, cmd_size)) {
-         DEBUG_PRINT("Failed to send TPM_Startup command\n");
+         printf("Failed to send TPM_Startup command\n");
          return false;
      }
      
      // Read response
      if (!tpm_read_response(response, &resp_size)) {
-         DEBUG_PRINT("Failed to read TPM_Startup response\n");
+         printf("Failed to read TPM_Startup response\n");
          return false;
      }
      
      // Check response code (some TPMs might return an error if already started)
      if (resp_size < 10) {
-         DEBUG_PRINT("Invalid TPM_Startup response size\n");
+         printf("Invalid TPM_Startup response size\n");
          return false;
      }
      
@@ -406,25 +378,25 @@
      
      // Send the command
      if (!tpm_send_command(cmd, cmd_size)) {
-         DEBUG_PRINT("Failed to send TPM_SelfTest command\n");
+         printf("Failed to send TPM_SelfTest command\n");
          return false;
      }
      
      // Read response
      if (!tpm_read_response(response, &resp_size)) {
-         DEBUG_PRINT("Failed to read TPM_SelfTest response\n");
+         printf("Failed to read TPM_SelfTest response\n");
          return false;
      }
      
      // Check response code
      if (resp_size < 10) {
-         DEBUG_PRINT("Invalid TPM_SelfTest response size\n");
+         printf("Invalid TPM_SelfTest response size\n");
          return false;
      }
      
      uint32_t responseCode = (response[6] << 24) | (response[7] << 16) | (response[8] << 8) | response[9];
      if (responseCode != TPM_RC_SUCCESS) {
-         DEBUG_PRINT("TPM_SelfTest failed with code: 0x%08X\n", responseCode);
+         printf("TPM_SelfTest failed with code: 0x%08X\n", responseCode);
          return false;
      }
      
@@ -499,25 +471,25 @@
      
      // Send command
      if (!tpm_send_command(cmd, cmd_size)) {
-         DEBUG_PRINT("Failed to send NV_DefineSpace command\n");
+         printf("Failed to send NV_DefineSpace command\n");
          return false;
      }
      
      // Read response
      if (!tpm_read_response(response, &resp_size)) {
-         DEBUG_PRINT("Failed to read NV_DefineSpace response\n");
+         printf("Failed to read NV_DefineSpace response\n");
          return false;
      }
      
      // Check response code
      if (resp_size < 10) {
-         DEBUG_PRINT("Invalid NV_DefineSpace response size\n");
+         printf("Invalid NV_DefineSpace response size\n");
          return false;
      }
      
      uint32_t responseCode = (response[6] << 24) | (response[7] << 16) | (response[8] << 8) | response[9];
      if (responseCode != TPM_RC_SUCCESS) {
-         DEBUG_PRINT("NV_DefineSpace failed with code: 0x%08X\n", responseCode);
+         printf("NV_DefineSpace failed with code: 0x%08X\n", responseCode);
          // The space might already exist, which is fine for our purposes
          if (responseCode == 0x14C) {  // TPM_RC_NV_DEFINED
              return true;
@@ -568,25 +540,25 @@
      
      // Send command
      if (!tpm_send_command(cmd, cmd_size)) {
-         DEBUG_PRINT("Failed to send NV_UndefineSpace command\n");
+         printf("Failed to send NV_UndefineSpace command\n");
          return false;
      }
      
      // Read response
      if (!tpm_read_response(response, &resp_size)) {
-         DEBUG_PRINT("Failed to read NV_UndefineSpace response\n");
+         printf("Failed to read NV_UndefineSpace response\n");
          return false;
      }
      
      // Check response code
      if (resp_size < 10) {
-         DEBUG_PRINT("Invalid NV_UndefineSpace response size\n");
+         printf("Invalid NV_UndefineSpace response size\n");
          return false;
      }
      
      uint32_t responseCode = (response[6] << 24) | (response[7] << 16) | (response[8] << 8) | response[9];
      if (responseCode != TPM_RC_SUCCESS) {
-         DEBUG_PRINT("NV_UndefineSpace failed with code: 0x%08X\n", responseCode);
+         printf("NV_UndefineSpace failed with code: 0x%08X\n", responseCode);
          return false;
      }
      
@@ -645,32 +617,32 @@ bool tpm_nv_read(uint32_t nvIndex, uint8_t* data, uint16_t* dataSize) {
     
     // Send command
     if (!tpm_send_command(cmd, cmd_size)) {
-        DEBUG_PRINT("Failed to send NV_Read command\n");
+        printf("Failed to send NV_Read command\n");
         return false;
     }
     
     // Read response
     if (!tpm_read_response(response, &resp_size)) {
-        DEBUG_PRINT("Failed to read NV_Read response\n");
+        printf("Failed to read NV_Read response\n");
         return false;
     }
     
     // Check response code
     if (resp_size < 12) {
-        DEBUG_PRINT("Invalid NV_Read response size\n");
+        printf("Invalid NV_Read response size\n");
         return false;
     }
     
     uint32_t responseCode = (response[6] << 24) | (response[7] << 16) | (response[8] << 8) | response[9];
     if (responseCode != TPM_RC_SUCCESS) {
-        DEBUG_PRINT("NV_Read failed with code: 0x%08X\n", responseCode);
+        printf("NV_Read failed with code: 0x%08X\n", responseCode);
         return false;
     }
     
     // Extract data size from the response
     uint16_t actualSize = (response[10] << 8) | response[11];
     if (actualSize > *dataSize) {
-        DEBUG_PRINT("Buffer too small for NV data\n");
+        printf("Buffer too small for NV data\n");
         return false;
     }
     
@@ -690,7 +662,7 @@ bool tpm_nv_write(uint32_t nvIndex, uint8_t* data, uint16_t dataSize) {
     
     // Check if data size is within limits
     if (dataSize > TPM_MAX_DATA_SIZE - 32) {
-        DEBUG_PRINT("Data too large for NV write\n");
+        printf("Data too large for NV write\n");
         return false;
     }
     
@@ -740,25 +712,25 @@ bool tpm_nv_write(uint32_t nvIndex, uint8_t* data, uint16_t dataSize) {
     
     // Send command
     if (!tpm_send_command(cmd, cmd_size)) {
-        DEBUG_PRINT("Failed to send NV_Write command\n");
+        printf("Failed to send NV_Write command\n");
         return false;
     }
     
     // Read response
     if (!tpm_read_response(response, &resp_size)) {
-        DEBUG_PRINT("Failed to read NV_Write response\n");
+        printf("Failed to read NV_Write response\n");
         return false;
     }
     
     // Check response code
     if (resp_size < 10) {
-        DEBUG_PRINT("Invalid NV_Write response size\n");
+        printf("Invalid NV_Write response size\n");
         return false;
     }
     
     uint32_t responseCode = (response[6] << 24) | (response[7] << 16) | (response[8] << 8) | response[9];
     if (responseCode != TPM_RC_SUCCESS) {
-        DEBUG_PRINT("NV_Write failed with code: 0x%08X\n", responseCode);
+        printf("NV_Write failed with code: 0x%08X\n", responseCode);
         return false;
     }
     
@@ -784,7 +756,7 @@ bool tpm_store_secure_text(const char* label, const char* text) {
     // Prepare the data (prefix with length)
     textLength = strlen(text);
     if (textLength > TPM_MAX_DATA_SIZE - 2) {
-        DEBUG_PRINT("Text too long to store in TPM\n");
+        printf("Text too long to store in TPM\n");
         return false;
     }
     
@@ -795,14 +767,14 @@ bool tpm_store_secure_text(const char* label, const char* text) {
     // Define NV space if it doesn't exist
     if (!tpm_nv_index_exists(nvIndex)) {
         if (!tpm_nv_define_space(nvIndex, textLength + 2)) {
-            DEBUG_PRINT("Failed to define NV space for label: %s\n", label);
+            printf("Failed to define NV space for label: %s\n", label);
             return false;
         }
     } else {
         // Space exists - check size
         uint16_t existingSize = 0;
         if (!tpm_nv_get_size(nvIndex, &existingSize)) {
-            DEBUG_PRINT("Failed to get size of existing NV space\n");
+            printf("Failed to get size of existing NV space\n");
             return false;
         }
         
@@ -810,7 +782,7 @@ bool tpm_store_secure_text(const char* label, const char* text) {
             // Undefine and redefine with larger size
             tpm_nv_undefine_space(nvIndex);
             if (!tpm_nv_define_space(nvIndex, textLength + 2)) {
-                DEBUG_PRINT("Failed to redefine NV space for label: %s\n", label);
+                printf("Failed to redefine NV space for label: %s\n", label);
                 return false;
             }
         }
@@ -818,11 +790,11 @@ bool tpm_store_secure_text(const char* label, const char* text) {
     
     // Write data to NV space
     if (!tpm_nv_write(nvIndex, buffer, textLength + 2)) {
-        DEBUG_PRINT("Failed to write text data to TPM\n");
+        printf("Failed to write text data to TPM\n");
         return false;
     }
     
-    DEBUG_PRINT("Successfully stored text for label: %s\n", label);
+    printf("Successfully stored text for label: %s\n", label);
     return true;
 }
 
@@ -844,31 +816,31 @@ bool tpm_retrieve_secure_text(const char* label, char* text, uint16_t maxLength)
     
     // Check if index exists
     if (!tpm_nv_index_exists(nvIndex)) {
-        DEBUG_PRINT("No data found for label: %s\n", label);
+        printf("No data found for label: %s\n", label);
         return false;
     }
     
     // Read data from TPM
     if (!tpm_nv_read(nvIndex, buffer, &bufferSize)) {
-        DEBUG_PRINT("Failed to read text data from TPM\n");
+        printf("Failed to read text data from TPM\n");
         return false;
     }
     
     // Extract length
     if (bufferSize < 2) {
-        DEBUG_PRINT("Invalid data format in TPM\n");
+        printf("Invalid data format in TPM\n");
         return false;
     }
     
     textLength = (buffer[0] << 8) | buffer[1];
     if (textLength + 2 > bufferSize) {
-        DEBUG_PRINT("Corrupted data in TPM\n");
+        printf("Corrupted data in TPM\n");
         return false;
     }
     
     // Check if we have enough space in the output buffer
     if (textLength >= maxLength) {
-        DEBUG_PRINT("Buffer too small for text data\n");
+        printf("Buffer too small for text data\n");
         return false;
     }
     
@@ -876,7 +848,7 @@ bool tpm_retrieve_secure_text(const char* label, char* text, uint16_t maxLength)
     memcpy(text, &buffer[2], textLength);
     text[textLength] = '\0';
     
-    DEBUG_PRINT("Successfully retrieved text for label: %s\n", label);
+    printf("Successfully retrieved text for label: %s\n", label);
     return true;
 }
 
@@ -884,46 +856,46 @@ bool tpm_retrieve_secure_text(const char* label, char* text, uint16_t maxLength)
 void tpm_secure_text_example(const char* textToStore) {
     char retrievedText[256] = {0};
     
-    DEBUG_PRINT("TPM Secure Text Storage Example\n");
+    printf("TPM Secure Text Storage Example\n");
     
     // Initialize TPM
     if (!tpm_init()) {
-        DEBUG_PRINT("Failed to initialize TPM\n");
+        printf("Failed to initialize TPM\n");
         return;
     }
     
     // Send startup command
     if (!tpm_startup(0x0000)) {  // TPM_SU_CLEAR
-        DEBUG_PRINT("TPM startup failed (may be already started)\n");
+        printf("TPM startup failed (may be already started)\n");
         // Continue anyway
     }
     
     // Store text with a label
     if (tpm_store_secure_text("secret_message", textToStore)) {
-        DEBUG_PRINT("Successfully stored secret message\n");
+        printf("Successfully stored secret message\n");
     } else {
-        DEBUG_PRINT("Failed to store secret message\n");
+        printf("Failed to store secret message\n");
         return;
     }
     
     // Retrieve the text
     if (tpm_retrieve_secure_text("secret_message", retrievedText, sizeof(retrievedText))) {
-        DEBUG_PRINT("Retrieved secret: %s\n", retrievedText);
+        printf("Retrieved secret: %s\n", retrievedText);
     } else {
-        DEBUG_PRINT("Failed to retrieve secret message\n");
+        printf("Failed to retrieve secret message\n");
     }
     
     // Store another text with a different label
     if (tpm_store_secure_text("config_data", "system.autoboot=true\nsystem.timeout=30")) {
-        DEBUG_PRINT("Successfully stored configuration data\n");
+        printf("Successfully stored configuration data\n");
         
         // Retrieve it
         if (tpm_retrieve_secure_text("config_data", retrievedText, sizeof(retrievedText))) {
-            DEBUG_PRINT("Retrieved config: %s\n", retrievedText);
+            printf("Retrieved config: %s\n", retrievedText);
         }
     }
     
-    DEBUG_PRINT("TPM Text Storage Example Completed\n");
+    printf("TPM Text Storage Example Completed\n");
 }
 
 // Complete implementation of tpm_nv_index_exists function from the original code
@@ -1003,25 +975,25 @@ bool tpm_nv_get_size(uint32_t nvIndex, uint16_t* size) {
     
     // Send command
     if (!tpm_send_command(cmd, cmd_size)) {
-        DEBUG_PRINT("Failed to send NV_ReadPublic command\n");
+        printf("Failed to send NV_ReadPublic command\n");
         return false;
     }
     
     // Read response
     if (!tpm_read_response(response, &resp_size)) {
-        DEBUG_PRINT("Failed to read NV_ReadPublic response\n");
+        printf("Failed to read NV_ReadPublic response\n");
         return false;
     }
     
     // Check response code
     if (resp_size < 26) { // Minimum size for a valid response
-        DEBUG_PRINT("Invalid NV_ReadPublic response size\n");
+        printf("Invalid NV_ReadPublic response size\n");
         return false;
     }
     
     uint32_t responseCode = (response[6] << 24) | (response[7] << 16) | (response[8] << 8) | response[9];
     if (responseCode != TPM_RC_SUCCESS) {
-        DEBUG_PRINT("NV_ReadPublic failed with code: 0x%08X\n", responseCode);
+        printf("NV_ReadPublic failed with code: 0x%08X\n", responseCode);
         return false;
     }
     

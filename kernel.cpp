@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cstdio> // For sprintf
 #include "test.h" // For sprintf
+#include "test2.h" // For sprintf
 
 #define SCREEN_BACKUP_SIZE (80 * 25)  // Hardcoded VGA dimensions
 #define MAX_COMMAND_LENGTH 80
@@ -981,6 +982,7 @@ void cmd_help() {
     cout << "  clear - Clear the screen\n";
     cout << "  hello - Display a greeting\n";
     cout << "  program1 - run a print program\n";
+    cout << "  program2 - run a print program\n";
 }
 
 void cmd_hello() {
@@ -1026,6 +1028,10 @@ void command_prompt() {
         }
         if (cmd == "program1") {
             print_prog();
+        }
+
+        if (cmd == "program2") {
+            print_prog2();
         }
     }
 }

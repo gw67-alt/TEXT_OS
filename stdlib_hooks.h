@@ -6,6 +6,21 @@
 #include <new>  // For placement new
 
 // ============================================================================
+// Common Constants
+// ============================================================================
+
+// Terminal buffer constants
+#define MAX_COMMAND_LENGTH 80
+
+// ============================================================================
+// External Declarations
+// ============================================================================
+
+// Declare external command buffer (defined in your terminal code)
+extern char command_buffer[MAX_COMMAND_LENGTH];
+extern bool command_ready;
+
+// ============================================================================
 // Standard C Library Function Overrides
 // ============================================================================
 

@@ -14,8 +14,9 @@ $(MAIN):
 	gcc -c test.cpp -ffreestanding -m32 -o test.o 
 
 	gcc -c test2.cpp -ffreestanding -m32 -o test2.o 
+	gcc -c stdlib_hooks.cpp -ffreestanding -m32 -o stdlib_hooks.o 
 
-	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o test.o test2.o -lgcc
+	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o test.o test2.o stdlib_hooks.o -lgcc
 
 	grub-mkrescue -o '$@' '$(ISODIR)'
 

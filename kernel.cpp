@@ -15,26 +15,6 @@
 class TerminalOutput;
 class TerminalInput;
 
-char* strcpy(char *dest, const char *src) {
-    char *original_dest = dest;
-    while (*src != '\0') {
-        *dest = *src;
-        dest++;
-        src++;
-    }
-    *dest = '\0';
-    return original_dest;
-}
-
-void* memset(void *str, int c, size_t n) {
-    unsigned char *ptr = static_cast<unsigned char*>(str);
-    unsigned char value = static_cast<unsigned char>(c);
-    for (size_t i = 0; i < n; i++) {
-        ptr[i] = value;
-    }
-    return str;
-}
-
 /* Hardware text mode color constants. */
 enum vga_color {
     COLOR_BLACK = 0,
@@ -66,44 +46,6 @@ enum vga_color {
  * @param n      Number of bytes to copy
  * @return       A pointer to dest
  */
- void* memcpy(void *dest, const void *src, size_t n) {
-    unsigned char *d = static_cast<unsigned char*>(dest);
-    const unsigned char *s = static_cast<const unsigned char*>(src);
-    
-    // Simple byte-by-byte copy
-    for (size_t i = 0; i < n; i++) {
-        d[i] = s[i];
-    }
-    
-    return dest;
-}
-
-// Optimized version of memcpy for word-aligned addresses (optional)
-void* memcpy_aligned(void *dest, const void *src, size_t n) {
-    // Check if addresses are word-aligned and size is multiple of 4
-    if (((reinterpret_cast<uintptr_t>(dest) & 0x3) == 0) && 
-        ((reinterpret_cast<uintptr_t>(src) & 0x3) == 0) && 
-        ((n & 0x3) == 0)) {
-        
-        uint32_t *d = static_cast<uint32_t*>(dest);
-        const uint32_t *s = static_cast<const uint32_t*>(src);
-        
-        // Copy 4 bytes at a time
-        for (size_t i = 0; i < n/4; i++) {
-            d[i] = s[i];
-        }
-    } else {
-        // Fall back to regular byte-by-byte copy
-        unsigned char *d = static_cast<unsigned char*>(dest);
-        const unsigned char *s = static_cast<const unsigned char*>(src);
-        
-        for (size_t i = 0; i < n; i++) {
-            d[i] = s[i];
-        }
-    }
-    
-    return dest;
-}
 
 
 static const size_t VGA_WIDTH = 80;
@@ -197,7 +139,6 @@ const char scancode_to_ascii[128] = {
 // Function declarations
 uint8_t make_color(enum vga_color fg, enum vga_color bg);
 uint16_t make_vgaentry(char c, uint8_t color);
-size_t strlen(const char* str);
 static inline uint8_t inb(uint16_t port);
 static inline void outb(uint16_t port, uint8_t val);
 void update_hardware_cursor(int x, int y);
@@ -234,12 +175,6 @@ uint16_t make_vgaentry(char c, uint8_t color) {
     return c16 | color16 << 8;
 }
 
-size_t strlen(const char* str) {
-    size_t ret = 0;
-    while (str[ret] != 0)
-        ret++;
-    return ret;
-}
 
 bool string_compare(const char* s1, const char* s2) {
     while (*s1 && (*s1 == *s2)) {

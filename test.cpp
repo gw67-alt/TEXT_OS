@@ -1,7 +1,8 @@
 #define get_cout get_cout3
 #define get_cin get_cin3
 #include "terminal_io.h"
-
+#include "stdlib_hooks.h"
+#include "iostream_wrapper.h"
 void print_prog() {
 
 

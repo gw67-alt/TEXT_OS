@@ -5,7 +5,7 @@
 #include <cstdint>  // uint16_t
 #include <cstdarg>
 #include <cstdio>
-void print_prog();
+
 // VGA dimensions (you might want these in a separate vga.h)
 static const size_t VGA_WIDTH = 80;
 static const size_t VGA_HEIGHT = 25;
@@ -76,5 +76,7 @@ TerminalOutput& get_cout() {
 TerminalInput& get_cin() { 
     return cin; 
 }
+
+
 
 #endif

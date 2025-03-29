@@ -5,8 +5,8 @@ void print_prog() {
     TerminalOutput& mycout = get_cout();
     TerminalInput& mycin = get_cin();
 
-    mycout << "Enter a number: ";
-    char numStr[80]; // Assuming a maximum of 80 characters for the number
-    mycin >> numStr;  // Read the input as a string
-    mycout << "You entered: " << numStr << "\n";
+    mycout << "Enter something to test cin and cout: ";
+    char Str[80]; // Assuming a maximum of 80 characters for the number
+    mycin >> Str;  // Read the input as a string
+    mycout << "You entered: " << Str << "\n";
 }

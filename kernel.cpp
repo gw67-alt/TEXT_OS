@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdio> // For sprintf
+#include "test.h" // For sprintf
 
 #define SCREEN_BACKUP_SIZE (80 * 25)  // Hardcoded VGA dimensions
 #define MAX_COMMAND_LENGTH 80
@@ -213,7 +214,6 @@ void scroll_screen();
 void init_pic();
 void init_pit();
 void init_keyboard();
-void process_command();
 void cmd_help();
 void cmd_clear();
 void cmd_hello();
@@ -788,9 +788,6 @@ extern "C" void keyboard_handler() {
             terminal_putchar(key);
             command_buffer[command_length] = '\0';
 
-            // Process the command immediately
-            process_command();
-
             // Notify TerminalInput about the command
             cin.setInputReady(command_buffer);
 
@@ -976,26 +973,6 @@ void init_keyboard() {
     asm volatile ("sti");
 }
 
-/* Process the command in the buffer */
-void process_command() {
-    // Skip processing if buffer is empty
-    if (command_length == 0) {
-        return;
-    }
-
-    // Null-terminate for string comparison (already done in keyboard_handler)
-
-    // Check against known commands
-    if (string_compare(command_buffer, "help")) {
-        cmd_help();
-    } else if (string_compare(command_buffer, "clear")) {
-        cmd_clear();
-    } else if (string_compare(command_buffer, "hello")) {
-        cmd_hello();
-    } else {
-        cout << "Unknown command: " << command_buffer << "\n";
-    }
-}
 
 /* Command implementations */
 void cmd_help() {
@@ -1003,15 +980,57 @@ void cmd_help() {
     cout << "  help  - Show this help message\n";
     cout << "  clear - Clear the screen\n";
     cout << "  hello - Display a greeting\n";
-}
-
-void cmd_clear() {
-    clear_screen();
+    cout << "  program1 - run a print program\n";
 }
 
 void cmd_hello() {
     cout << "Hello, user!\n";
 }
+class StringRef {
+    private:
+        const char* data;
+
+    public:
+        // Implicit constructor to allow automatic conversion
+        StringRef(const char* str) : data(str) {}
+
+        // Get the underlying string
+        const char* c_str() const { return data; }
+
+        // Compare with another string using string_compare
+        bool operator==(const StringRef& other) const {
+            return string_compare(data, other.data);
+        }
+    };
+
+void command_prompt() {
+    char input[MAX_COMMAND_LENGTH + 1]; // Add 1 for null terminator
+    /* Display initial prompt */
+    while (true) {
+        cout << "> ";
+
+        // Safely read input and null-terminate
+        cin >> input;
+        input[MAX_COMMAND_LENGTH] = '\0'; // Ensure null termination
+
+        StringRef cmd(input); // Create a StringRef from the input
+
+        if (cmd == "help") {
+            cmd_help();
+        }
+        if (cmd == "clear") {
+            clear_screen();
+        }
+        if (cmd == "hello") {
+            cmd_hello();
+        }
+        if (cmd == "program1") {
+            print_prog();
+        }
+    }
+}
+
+
 // Modified kernel_main function with updated message (no PgUp/PgDn)
 extern "C" void kernel_main() {
     /* Initialize terminal interface */
@@ -1025,26 +1044,9 @@ extern "C" void kernel_main() {
 
     cout << "Hello, kernel World!" << '\n';
     cout << "Initialization complete. Start typing commands...\n";
-    cout << "Use Up/Down arrows for command history.\n";
-    print_prog();
 
-
+    command_prompt();
     /* Reset command buffer */
     command_length = 0;
 
-    /* Main loop - process input and commands */
-    while (1) {
-        char input[MAX_COMMAND_LENGTH];
-        /* Display initial prompt */
-        cout << "> ";
-        cin >> input;
-        
-        // The cin >> input operation already:
-        // 1. Displays the prompt
-        // 2. Waits for user to press Enter
-        // 3. Processes the command via process_command() called from keyboard_handler
-        // 4. Displays a new prompt
-        
-        // So we don't need to output anything else in the main loop
-    }
 }

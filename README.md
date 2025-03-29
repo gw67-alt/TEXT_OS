@@ -10,7 +10,8 @@ currently requiring
 
 etc...
 
-and StringRef
+TerminalInput& TerminalInput::operator>>, etc... for string and int
 
-relabeling & stringRef, etc... required for different .cpp files in the OS.
+
+relabeling, stringRef, TerminalInput::operator>>, etc... required for different .cpp files in the OS.
 

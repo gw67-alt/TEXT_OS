@@ -13,10 +13,6 @@
 class TerminalOutput;
 class TerminalInput;
 
-// Global instances (forward declare them)
-extern TerminalOutput cout;
-extern TerminalInput cin;
-
 char* strcpy(char *dest, const char *src) {
     char *original_dest = dest;
     while (*src != '\0') {
@@ -817,14 +813,6 @@ extern "C" void keyboard_handler() {
     outb(0x20, 0x20);
 }
 
-// Accessors for the global cout and cin instances
-TerminalOutput& get_cout() {
-    return cout;
-}
-
-TerminalInput& get_cin() {
-    return cin;
-}
 
 // Initialize the TerminalOutput
 void init_terminal_io() {
@@ -1038,7 +1026,7 @@ extern "C" void kernel_main() {
     cout << "Hello, kernel World!" << '\n';
     cout << "Initialization complete. Start typing commands...\n";
     cout << "Use Up/Down arrows for command history.\n";
-
+    print_prog();
 
 
     /* Reset command buffer */

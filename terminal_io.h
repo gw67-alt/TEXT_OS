@@ -35,7 +35,8 @@ class TerminalOutput {
     
     class TerminalInput {
     public:
-        TerminalInput& operator>>(char* str);
+    TerminalInput& operator>>(char* str);
+    TerminalInput& operator>>(int num);
     };
     
     extern TerminalOutput cout;

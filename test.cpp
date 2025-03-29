@@ -1,5 +1,4 @@
 #include "terminal_io.h"
-#include <cstdlib> // For atoi
 
 void print_prog() {
     TerminalOutput& cout = get_cout();

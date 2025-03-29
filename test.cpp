@@ -2,11 +2,11 @@
 #include <cstdlib> // For atoi
 
 void print_prog() {
-    TerminalOutput& mycout = get_cout();
-    TerminalInput& mycin = get_cin();
+    TerminalOutput& cout = get_cout();
+    TerminalInput& cin = get_cin();
 
-    mycout << "Enter something to test cin and cout: ";
+    cout << "Enter something to test cin and cout: ";
     char Str[80]; // Assuming a maximum of 80 characters for the number
-    mycin >> Str;  // Read the input as a string
-    mycout << "You entered: " << Str << "\n";
+    cin >> Str;  // Read the input as a string
+    cout << "You entered: " << Str << "\n";
 }

@@ -5,8 +5,8 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdio> // For sprintf
-#include "test.h" // For sprintf
-#include "test2.h" // For sprintf
+#include "test.h" 
+#include "test2.h"
 
 #define SCREEN_BACKUP_SIZE (80 * 25)  // Hardcoded VGA dimensions
 #define MAX_COMMAND_LENGTH 80
@@ -198,7 +198,6 @@ const char scancode_to_ascii[128] = {
 uint8_t make_color(enum vga_color fg, enum vga_color bg);
 uint16_t make_vgaentry(char c, uint8_t color);
 size_t strlen(const char* str);
-bool string_compare(const char* s1, const char* s2);
 static inline uint8_t inb(uint16_t port);
 static inline void outb(uint16_t port, uint8_t val);
 void update_hardware_cursor(int x, int y);

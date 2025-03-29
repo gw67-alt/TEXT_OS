@@ -8,5 +8,8 @@ void print_prog2() {
     cout << "Enter username: ";
     char Str[80]; // Assuming a maximum of 80 characters for the number
     cin >> Str;  // Read the input as a string
-    cout << "Welcome " << Str << "!\n";
+
+    if (Str == "george") {
+        cout << "Welcome " << Str << "!\n";
+    }
 }

@@ -48,5 +48,8 @@ class TerminalOutput {
     TerminalInput& get_cin() { 
         return cin; 
     }
+
+
+    
     #endif
 

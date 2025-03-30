@@ -40,10 +40,10 @@ void command_prompt() {
             cmd_hello();
         }
         if (cmd == "program1") {
-            //print_prog();
+            print_prog();
         }
         if (cmd == "program2") {
-            //print_prog2();
+            print_prog2();
         }
     }
 }

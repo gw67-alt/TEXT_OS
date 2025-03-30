@@ -31,9 +31,11 @@ $(MAIN):
 
 	gcc -c test2.cpp -ffreestanding -m32 -o test2.o 
 
+	gcc -c pcie.cpp -ffreestanding -m32 -o pcie.o 
 
 
-	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o string.o types.o terminal_io.o terminal_hooks.o stdlib_hooks.o iostream_wrapper.o interrupts.o test.o test2.o -lgcc
+
+	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o string.o types.o terminal_io.o terminal_hooks.o stdlib_hooks.o iostream_wrapper.o interrupts.o test.o test2.o pcie.o -lgcc
 
 	grub-mkrescue -o '$@' '$(ISODIR)'
 

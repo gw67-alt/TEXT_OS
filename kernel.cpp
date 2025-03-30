@@ -3,6 +3,7 @@
 #include "terminal_io.h"
 #include "iostream_wrapper.h"
 #include "interrupts.h"
+#include "pcie.h"
 
 /* Command implementations */
 void cmd_help() {
@@ -12,6 +13,9 @@ void cmd_help() {
     cout << "  hello - Display a greeting\n";
     cout << "  program1 - run a print program\n";
     cout << "  program2 - run a print program\n";
+    cout << "  pcienum - Enumerate PCIe devices\n";
+    cout << "  pcicfg  - Configure PCIe devices\n";
+
 }
 
 void cmd_hello() {
@@ -44,6 +48,13 @@ void command_prompt() {
         }
         if (cmd == "program2") {
             print_prog2();
+        }
+
+        if (cmd == "pcienum") {
+            cmd_pci_enum();
+        }
+        if (cmd == "pcicfg") {
+            cmd_pci_config();
         }
     }
 }

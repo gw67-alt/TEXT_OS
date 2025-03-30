@@ -1,7 +1,6 @@
 #include "iostream_wrapper.h"
 #include "stdlib_hooks.h"
 
-
 // Global instances
 TerminalOutput cout;
 TerminalInput cin;
@@ -10,6 +9,19 @@ TerminalInput cin;
 TerminalOutput::TerminalOutput() {
     // Initialize scrollback buffer
     memset(scrollback_buffer, 0, sizeof(scrollback_buffer));
+    // Initialize to decimal format by default
+    use_hex_format = false;
+}
+
+// Format modifiers implementation
+TerminalOutput& TerminalOutput::hex() {
+    use_hex_format = true;
+    return *this;
+}
+
+TerminalOutput& TerminalOutput::dec() {
+    use_hex_format = false;
+    return *this;
 }
 
 void TerminalOutput::scroll_screen_internal() {
@@ -179,14 +191,22 @@ TerminalOutput& TerminalOutput::operator<<(char c) {
 
 TerminalOutput& TerminalOutput::operator<<(int num) {
     char buffer[20];
-    sprintf(buffer, "%d", num);
+    if (use_hex_format) {
+        sprintf(buffer, "0x%x", num);
+    } else {
+        sprintf(buffer, "%d", num);
+    }
     *this << buffer;
     return *this;
 }
 
 TerminalOutput& TerminalOutput::operator<<(unsigned int num) {
     char buffer[20];
-    sprintf(buffer, "%u", num);
+    if (use_hex_format) {
+        sprintf(buffer, "0x%x", num);
+    } else {
+        sprintf(buffer, "%u", num);
+    }
     *this << buffer;
     return *this;
 }

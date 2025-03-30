@@ -54,12 +54,12 @@ extern "C" void keyboard_handler() {
         switch (scancode) {
             case SCANCODE_UP: // Up arrow
                 // Access the global cin object and use history navigation
-                cin.navigateHistory(true);
+                //cin.navigateHistory(true);
                 break;
                 
             case SCANCODE_DOWN: // Down arrow
                 // Access the global cin object and use history navigation
-                cin.navigateHistory(false);
+                //cin.navigateHistory(false);
                 break;
         }
         

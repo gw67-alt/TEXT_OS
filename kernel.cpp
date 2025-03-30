@@ -4,6 +4,7 @@
 #include "iostream_wrapper.h"
 #include "interrupts.h"
 #include "pcie.h"
+#include "nvme_config.h"
 
 /* Command implementations */
 void cmd_help() {
@@ -15,6 +16,8 @@ void cmd_help() {
     cout << "  program2 - run a print program\n";
     cout << "  pcienum - Enumerate PCIe devices\n";
     cout << "  pcicfg  - Configure PCIe devices\n";
+    cout << "  nvmescan  - Detect NVMe controllers\n";
+    cout << "  nvmeinfo  - show information about detected NVMe devices\n";
 
 }
 
@@ -55,6 +58,14 @@ void command_prompt() {
         }
         if (cmd == "pcicfg") {
             cmd_pci_config();
+        }
+
+        if (cmd == "nvmescan") {
+            nvme_scan_and_initialize();
+        }
+
+        if (cmd == "nvmeinfo") {
+            nvme_display_controllers();
         }
     }
 }

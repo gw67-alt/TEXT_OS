@@ -1,1 +1,2 @@
-
+cin >>, acts as new line, perhaps an oversimplification...
+TODO, add PCIe enumeration.

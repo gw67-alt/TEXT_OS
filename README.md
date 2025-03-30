@@ -1,3 +1,9 @@
-cin >>, acts as new line, perhaps an oversimplification...
+cin >>, acts as getline, perhaps an oversimplification...
 
-TODO, add PCIe enumeration.
+limitations are: cin requires atoi() cannot directly parse ints
+cout hex requires cout.hex() or decimal out.dec() before cout usage, will change soon...
+
+todo, implement page scrolling using interrupts
+
+then ACHI and xHCI
+

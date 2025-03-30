@@ -28,6 +28,6 @@ void print_prog2() {
     cin >> input;  // Read the input as a string
     int a = atoi(input);
     if (a == 1) {
-        cout << "1 = " << input << "\n";
+        cout.hex() << "1 = " << a << "\n";
     }
 }

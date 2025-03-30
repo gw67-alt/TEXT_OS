@@ -11,8 +11,8 @@
  #include "iostream_wrapper.h"
  #include "interrupts.h"
  #include "hardware_specs.h"
+ #include "stdlib_hooks.h"
  
-
  
  /* Command processing function */
  void command_prompt() {
@@ -46,11 +46,14 @@
              cmd_pstates();
          } else if (cmd == "full") {
              cmd_full();
-         } else {
-             cout << "Unknown command. Type 'help' for available commands.\n";
+         } else if (cmd == "program1") {
+             print_prog();
+         } else if (cmd == "program2") {
+             print_prog2();
+            } 
          }
      }
- }
+
   /* Command implementations */
   void cmd_help() {
     cout << "Available commands:\n";
@@ -76,7 +79,6 @@
     /* Initialize keyboard and timer interrupts */
     init_keyboard();
  
-
     cout << "Hello, kernel World!" << '\n';
     cout << "Initialization complete. Start typing commands...\n";
  

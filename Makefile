@@ -11,12 +11,25 @@ $(MAIN):
 
 	gcc -c kernel.cpp -ffreestanding -m32 -o kernel.o 
 
-	gcc -c test.cpp -ffreestanding -m32 -o test.o 
+	gcc -c types.cpp -ffreestanding -m32 -o types.o 
 
-	gcc -c test2.cpp -ffreestanding -m32 -o test2.o 
+
+	gcc -c terminal_io.cpp -ffreestanding -m32 -o terminal_io.o 
+
+	gcc -c terminal_hooks.cpp -ffreestanding -m32 -o terminal_hooks.o 
+
 	gcc -c stdlib_hooks.cpp -ffreestanding -m32 -o stdlib_hooks.o 
 
-	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o test.o test2.o stdlib_hooks.o -lgcc
+	gcc -c iostream_wrapper.cpp -ffreestanding -m32 -o iostream_wrapper.o 
+
+	gcc -c interrupts.cpp -ffreestanding -m32 -o interrupts.o 
+
+
+	gcc -c string.cpp -ffreestanding -m32 -o string.o 
+
+
+
+	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o string.o types.o terminal_io.o terminal_hooks.o stdlib_hooks.o iostream_wrapper.o interrupts.o -lgcc
 
 	grub-mkrescue -o '$@' '$(ISODIR)'
 

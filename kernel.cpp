@@ -12,6 +12,7 @@
  #include "interrupts.h"
  #include "hardware_specs.h"
  #include "stdlib_hooks.h"
+ #include "pci.h"
  
  
  /* Command processing function */
@@ -49,8 +50,10 @@
          } else if (cmd == "program1") {
              print_prog();
          } else if (cmd == "program2") {
-             print_prog2();
-            } 
+            print_prog2();
+         } else if (cmd == "pciscan") {
+            scan_pci();
+           } 
          }
      }
 
@@ -59,6 +62,7 @@
     cout << "Available commands:\n";
     cout << "  help         - Show this help message\n";
     cout << "  clear        - Clear the screen\n";
+    cout << "  pciscan      - Scan PCI devices\n";
     cout << "  cpu          - Display CPU information\n";
     cout << "  memory       - Display memory configuration\n";
     cout << "  cache        - Display cache information\n";
@@ -80,7 +84,7 @@
  
     /* Initialize keyboard and timer interrupts */
     init_keyboard();
- 
+
     cout << "Hello, kernel World!" << '\n';
     cout << "Initialization complete. Start typing commands...\n";
  

@@ -5,6 +5,11 @@
 TerminalOutput cout;
 TerminalInput cin;
 
+// Add this implementation for the new operator
+TerminalOutput& TerminalOutput::operator<<(TerminalOutput& (*manip)(TerminalOutput&)) {
+    return manip(*this);
+}
+
 // Implementation of TerminalOutput methods
 TerminalOutput::TerminalOutput() {
     // Initialize scrollback buffer
@@ -314,6 +319,17 @@ TerminalInput& TerminalInput::operator>>(char* str) {
     // Copy input to provided string
     strcpy(str, input_buffer);
     return *this;
+}
+
+// Implementation of std namespace manipulators
+namespace std {
+    TerminalOutput& hex(TerminalOutput& out) {
+        return out.hex();
+    }
+    
+    TerminalOutput& dec(TerminalOutput& out) {
+        return out.dec();
+    }
 }
 
 void init_terminal_io() {

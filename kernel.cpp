@@ -57,15 +57,17 @@
   /* Command implementations */
   void cmd_help() {
     cout << "Available commands:\n";
-    cout << "  help       - Show this help message\n";
-    cout << "  clear      - Clear the screen\n";
-    cout << "  cpu        - Display CPU information\n";
-    cout << "  memory     - Display memory configuration\n";
-    cout << "  cache      - Display cache information\n";
-    cout << "  topology   - Display CPU topology\n";
-    cout << "  features   - Display CPU features\n";
-    cout << "  pstates    - Display P-States information\n";
-    cout << "  full       - Display all hardware information\n";
+    cout << "  help         - Show this help message\n";
+    cout << "  clear        - Clear the screen\n";
+    cout << "  cpu          - Display CPU information\n";
+    cout << "  memory       - Display memory configuration\n";
+    cout << "  cache        - Display cache information\n";
+    cout << "  topology     - Display CPU topology\n";
+    cout << "  features     - Display CPU features\n";
+    cout << "  pstates      - Display P-States information\n";
+    cout << "  full         - Display all hardware information\n";
+    cout << "  program1     - Run test program 1\n";
+    cout << "  program2     - Run test program 2\n";
 }
 
  /* Main kernel entry point */

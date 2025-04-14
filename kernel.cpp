@@ -1,11 +1,4 @@
-/**
- * AMD64 Hardware Configuration Reader
- * 
- * This is a bare metal implementation for reading AMD64 hardware configuration
- * using iostream_wrapper for output.
- */
 
- #include "kernel.h"
  #include "terminal_hooks.h"
  #include "terminal_io.h"
  #include "iostream_wrapper.h"
@@ -13,7 +6,28 @@
  #include "hardware_specs.h"
  #include "stdlib_hooks.h"
  #include "pci.h"
- 
+ #include "sata.h"
+ #include "test.h"
+ #include "test2.h"
+
+/* Command implementations */
+void cmd_help() {
+    cout << "Available commands:\n";
+    cout << "  help         - Show this help message\n";
+    cout << "  clear        - Clear the screen\n";
+    cout << "  pciscan      - Scan PCI devices\n";
+    cout << "  cpu          - Display CPU information\n";
+    cout << "  memory       - Display memory configuration\n";
+    cout << "  cache        - Display cache information\n";
+    cout << "  topology     - Display CPU topology\n";
+    cout << "  features     - Display CPU features\n";
+    cout << "  pstates      - Display P-States information\n";
+    cout << "  full         - Display all hardware information\n";
+    cout << "  program1     - Run test program 1\n";
+    cout << "  program2     - Run test program 2\n";
+    cout << "  debugsata     - Run sata debug\n";
+
+}
  
  /* Command processing function */
  void command_prompt() {
@@ -53,26 +67,12 @@
             print_prog2();
          } else if (cmd == "pciscan") {
             scan_pci();
-           } 
+         } else if (cmd == "debugsata") {
+             debug_sata_controller();
+         }
          }
      }
 
-  /* Command implementations */
-  void cmd_help() {
-    cout << "Available commands:\n";
-    cout << "  help         - Show this help message\n";
-    cout << "  clear        - Clear the screen\n";
-    cout << "  pciscan      - Scan PCI devices\n";
-    cout << "  cpu          - Display CPU information\n";
-    cout << "  memory       - Display memory configuration\n";
-    cout << "  cache        - Display cache information\n";
-    cout << "  topology     - Display CPU topology\n";
-    cout << "  features     - Display CPU features\n";
-    cout << "  pstates      - Display P-States information\n";
-    cout << "  full         - Display all hardware information\n";
-    cout << "  program1     - Run test program 1\n";
-    cout << "  program2     - Run test program 2\n";
-}
 
  /* Main kernel entry point */
  extern "C" void kernel_main() {

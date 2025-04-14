@@ -117,7 +117,9 @@ void scan_pci() {
                         }
                     }
                 }
-                
+                cout << "\nPress enter to continue\n\n";
+                char input[1];
+                cin >> input;
                 cout << "\n";
             }
         }

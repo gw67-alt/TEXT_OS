@@ -16,6 +16,7 @@
  #define MSR_CPUID_FEATURES  0xC0011005  // CPUID Features
  
 
+char input[1];
  /* MSR read function */
  uint64_t rdmsr(uint32_t msr) {
      uint32_t low, high;
@@ -281,6 +282,9 @@
      if (edx & (1 << 5))  cout << "    MSR: Model Specific Registers\n";
      if (edx & (1 << 6))  cout << "    PAE: Physical Address Extension\n";
      if (edx & (1 << 8))  cout << "    CX8: CMPXCHG8 Instruction\n";
+     cout << "\nPress enter to continue\n\n";
+     input[1];
+     cin >> input;
      if (edx & (1 << 11)) cout << "    SEP: SYSENTER/SYSEXIT Instructions\n";
      if (edx & (1 << 15)) cout << "    CMOV: Conditional Move Instructions\n";
      if (edx & (1 << 19)) cout << "    CLFLUSH: CLFLUSH Instruction\n";
@@ -289,7 +293,10 @@
      if (edx & (1 << 25)) cout << "    SSE: SSE Extensions\n";
      if (edx & (1 << 26)) cout << "    SSE2: SSE2 Extensions\n";
      if (edx & (1 << 28)) cout << "    HTT: Hyper-Threading Technology\n";
-     
+
+     cout << "\nPress enter to continue\n\n";
+     cin >> input;
+
      if (ecx & (1 << 0))  cout << "    SSE3: SSE3 Extensions\n";
      if (ecx & (1 << 1))  cout << "    PCLMULQDQ: PCLMULQDQ Instruction\n";
      if (ecx & (1 << 9))  cout << "    SSSE3: SSSE3 Extensions\n";
@@ -298,6 +305,9 @@
      if (ecx & (1 << 19)) cout << "    SSE4.1: SSE4.1 Extensions\n";
      if (ecx & (1 << 20)) cout << "    SSE4.2: SSE4.2 Extensions\n";
      if (ecx & (1 << 21)) cout << "    x2APIC: x2APIC Support\n";
+     cout << "\nPress enter to continue\n\n";
+
+     cin >> input;
      if (ecx & (1 << 22)) cout << "    MOVBE: MOVBE Instruction\n";
      if (ecx & (1 << 23)) cout << "    POPCNT: POPCNT Instruction\n";
      if (ecx & (1 << 25)) cout << "    AES: AES Instruction Set\n";
@@ -320,7 +330,8 @@
          if (edx & (1 << 27)) cout << "    RDTSCP: RDTSCP Instruction\n";
          if (edx & (1 << 29)) cout << "    LM: Long Mode (64-bit)\n";
          if (edx & (1 << 31)) cout << "    3DNow!: 3DNow! Instructions\n";
-         
+         cout << "\nPress enter to continue\n\n";
+         cin >> input;
          if (ecx & (1 << 0))  cout << "    LAHF/SAHF: LAHF/SAHF in 64-bit\n";
          if (ecx & (1 << 1))  cout << "    CMP_Legacy: Core Multi-Processing Legacy\n";
          if (ecx & (1 << 2))  cout << "    SVM: Secure Virtual Machine\n";
@@ -329,6 +340,10 @@
          if (ecx & (1 << 5))  cout << "    ABM: Advanced Bit Manipulation\n";
          if (ecx & (1 << 6))  cout << "    SSE4A: SSE4A Instructions\n";
          if (ecx & (1 << 7))  cout << "    MisAlignSse: Misaligned SSE Mode\n";
+
+         cout << "\nPress enter to continue\n\n";
+
+         cin >> input;
          if (ecx & (1 << 8))  cout << "    3DNowPrefetch: PREFETCH/PREFETCHW\n";
          if (ecx & (1 << 9))  cout << "    OSVW: OS Visible Workaround\n";
          if (ecx & (1 << 10)) cout << "    IBS: Instruction Based Sampling\n";

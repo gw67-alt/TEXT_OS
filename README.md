@@ -1,8 +1,5 @@
 cin >>, acts as getline, perhaps an oversimplification...
 
-limitations are: cin cannot directly accept int
+limitations are: cin cannot directly accept int, use atoi
 
-todo, implement page scrolling using interrupts
-
-then pcie config
-
+TODO start sending I/O commands to PCIe devices

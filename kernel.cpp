@@ -25,7 +25,7 @@ void cmd_help() {
     cout << "  full         - Display all hardware information\n";
     cout << "  program1     - Run test program 1\n";
     cout << "  program2     - Run test program 2\n";
-    cout << "  debugsata     - Run sata debug\n";
+    cout << "  crypt        - Run crypt program\n";
 
 }
  
@@ -67,8 +67,8 @@ void cmd_help() {
             print_prog2();
          } else if (cmd == "pciscan") {
             scan_pci();
-         } else if (cmd == "debugsata") {
-             debug_sata_controller();
+         } else if (cmd == "crypt") {
+             crypt();
          }
          }
      }

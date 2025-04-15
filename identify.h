@@ -886,5 +886,114 @@ int write_sectors_ahci(uint64_t ahci_base, int port, uint64_t lba, uint16_t sect
  * @param port Port number to test.
  */
  // Leave non-static/non-inline as primary API, but beware multiple definition errors if header included > once.
+void test_ahci_rw(uint64_t ahci_base, int port) {
+    cout << "\n--- Testing AHCI Port " << port << " R/W Operations ---\n";
+
+    // 1. Send IDENTIFY Command (using the function already defined)
+    int identify_status = send_identify_command(ahci_base, port);
+    if (identify_status != 0) {
+        cout << "ERROR: IDENTIFY command failed for port " << port << " with status " << identify_status << ". Aborting R/W test.\n";
+        return;
+    }
+
+    // Check if LBA and LBA48 are supported before proceeding
+    // Assumes identify_data_buffer holds the latest IDENTIFY result. This is fragile!
+    // A better approach would be to store device capabilities per port.
+    uint16_t* identify_data_ptr = (uint16_t*)identify_data_buffer; // Use the static buffer
+    if (!(identify_data_ptr[49] & (1 << 9))) {
+        cout << "INFO: Device on port " << port << " does not support LBA. Skipping R/W test.\n";
+        return;
+    }
+    bool lba48_supported = (identify_data_ptr[83] & (1 << 10));
+    if (!lba48_supported) {
+        cout << "INFO: Device on port " << port << " does not support LBA48. READ/WRITE DMA EXT may fail. Skipping LBA48 test.\n";
+        // TODO: Could implement READ/WRITE DMA (28-bit LBA) commands as fallback
+        return;
+    }
+
+    // --- Read/Write Test Parameters ---
+    uint64_t test_lba = 0; // Test on the first sector (LBA 0) - EXTREMELY DANGEROUS!
+    uint16_t test_sector_count = 1; // Test with a single sector
+
+    cout << "Proceeding.\n";
+
+
+    // --- Stage 2: Prepare and Write test data ---
+    cout << "\nStage 2: Writing to LBA " << (unsigned int)test_lba << "...\n";
+
+    cout << "";
+
+    // Option 1: Fill with a single string at the beginning
+    char LBA_TEST[512];
+    
+
+    // Add option to send identify commands
+    cout << "\nDo you want to (r)ead or (w)rite?: ";
+    char response[2];
+    cin >> response;
+
+    if (response[0] == 'r') {
+        cout << "Enter LBA number: ";
+
+        cin >> LBA_TEST;
+        test_lba = str_int(LBA_TEST);
+
+        // --- Stage 3: Read back data ---
+        cout << "\nStage 3: Reading back data from LBA " << (unsigned int)test_lba << "...\n";
+        // Clear buffer with different pattern before reading back
+        for (int i = 0; i < test_sector_count * 512; ++i) rw_data_buffer[i] = 0xFF;
+
+        int read_status2 = read_sectors_ahci(ahci_base, port, test_lba, test_sector_count, rw_data_buffer);
+        if (read_status2 != 0) {
+            cout << "ERROR: Stage 3 read back failed with status " << read_status2 << ". Cannot verify write.\n";
+            return;
+        }
+        cout << "Stage 3 read back succeeded. 512 bytes: ";
+        for (int k = 0; k < 512; ++k) {
+            char c = rw_data_buffer[k];
+            // Check if the character is printable
+            if (c >= 32 && c <= 126) {
+                cout << c;
+            }
+            else {
+                // For non-printable characters, print a placeholder
+                cout << "· ";
+            }
+        }
+    }
+        cout << "...\n";
+        if (response[0] == 'w') {
+            cout << "Enter LBA number: ";
+
+            cin >> LBA_TEST;
+            test_lba = str_int(LBA_TEST);
+
+
+            char str[512];
+
+            cout << "Enter data: ";
+            cin >> str;
+            int str_len = strlen(str);
+
+            // Copy the string to the beginning of the buffer
+            memcpy(rw_data_buffer, str, str_len);
+
+            // Fill the rest with zeros or another pattern
+            for (int i = str_len; i < test_sector_count * 512; ++i) {
+                rw_data_buffer[i] = ' '; // or any other value
+            }
+            int write_status = write_sectors_ahci(ahci_base, port, test_lba, test_sector_count, rw_data_buffer);
+            if (write_status != 0) {
+                cout << "ERROR: Stage 2 write failed with status " << write_status << ". Aborting test. SECTOR MAY BE CORRUPTED.\n";
+                // Attempt to restore original data? Risky if write failed partially.
+                return;
+            }
+            cout << "Stage 2 write command succeeded.\n";
+        }
+
+
+
+    cout << "\n--- Test Finished for Port " << port << " ---\n";
+}
 
 #endif // IDENTIFY_H

@@ -135,7 +135,7 @@ void debug_sata_controller() {
     uint16_t bus, dev, func;
 
     for (bus = 0; bus < 256 && !ahci_base; bus++) {
-        for (dev = 0; dev < 32 && !ahci_base; dev++) {
+        for (dev = 0; dev < 8 && !ahci_base; dev++) {
             for (func = 0; func < 8 && !ahci_base; func++) {
                 uint32_t class_reg = pci_read_config_dword(bus, dev, func, 0x08);
                 uint8_t class_code = (class_reg >> 24) & 0xFF;
@@ -217,7 +217,7 @@ void debug_sata_controller() {
     // Get number of ports and scan each implemented port
     cout << "Port Status:\n";
 
-    for (int i = 0; i < 32; i++) {
+    for (int i = 0; i < 8; i++) {
         if (pi & (1 << i)) {
             uint64_t port_addr = ahci_base + AHCI_PORT_BASE + (i * AHCI_PORT_SIZE);
 
@@ -273,7 +273,7 @@ void debug_sata_controller() {
     if (response[0] == 'y' || response[0] == 'Y') {
         // Use the ahci_base that was already found and used in the function
         // Now check each implemented port
-        for (int i = 0; i < 32; i++) {
+        for (int i = 0; i < 8; i++) {
             if (pi & (1 << i)) {
                 cout << "Send IDENTIFY to port " << i << "? (y/n): ";
                 char port_response[2];
@@ -281,7 +281,79 @@ void debug_sata_controller() {
 
                 if (port_response[0] == 'y' || port_response[0] == 'Y') {
                     send_identify_command(ahci_base, i);
+                    while (true) {
+                        cout << "\nDo you want to do data operations on disk? (y/n): ";
+                        cin >> response;
+                        if (response[0] == 'n' || response[0] == 'N') {
+                            break;
+                        }
+                        if (response[0] == 'y' || response[0] == 'Y') {
 
+
+                            uint64_t test_lba = 0;
+
+                            uint16_t test_sector_count = 1; // Test with a single sector
+                            char LBA_TEST[512];
+
+                            cout << "\nDo you want to read/write data from disk? (r/w): ";
+                            cin >> response;
+                            if (response[0] == 'r' || response[0] == 'R') {
+                                cout << "Enter LBA number: ";
+
+                                cin >> LBA_TEST;
+                                test_lba = str_int(LBA_TEST);
+
+                                // --- Stage 3: Read back data ---
+                                cout << "\nStage 3: Reading back data from LBA " << (unsigned int)test_lba << "...\n";
+                                // Clear buffer with different pattern before reading back
+                                for (int i = 0; i < test_sector_count * 512; ++i) rw_data_buffer[i] = 0xFF;
+
+                                int read_status2 = read_sectors_ahci(ahci_base, i, test_lba, test_sector_count, rw_data_buffer);
+                                if (read_status2 != 0) {
+                                    cout << "ERROR: Stage 3 read back failed with status " << read_status2 << ". Cannot verify write.\n";
+                                    return;
+                                }
+                                cout << "Stage 3 read back succeeded. 512 bytes: ";
+                                for (int k = 0; k < 512; ++k) {
+                                    char c = rw_data_buffer[k];
+                                    // Check if the character is printable
+                                    if (c >= 32 && c <= 126) {
+                                        cout << c;
+                                    }
+                                    else {
+                                        // For non-printable characters, print a placeholder
+                                        cout << "· ";
+                                    }
+                                }
+                            }
+                            if (response[0] == 'w' || response[0] == 'W') {
+
+
+                                cout << "Enter LBA number: ";
+
+                                cin >> LBA_TEST;
+                                test_lba = str_int(LBA_TEST);
+
+
+                                char str[512];
+
+                                cout << "Enter data: ";
+                                cin >> str;
+                                int str_len = strlen(str);
+
+                                // Copy the string to the beginning of the buffer
+                                memcpy(rw_data_buffer, str, str_len);
+
+                                // Fill the rest with zeros or another pattern
+                                for (int i = str_len; i < test_sector_count * 512; ++i) {
+                                    rw_data_buffer[i] = ' '; // or any other value
+                                }
+
+
+                                write_sectors_ahci(ahci_base, i, test_lba, test_sector_count, rw_data_buffer);
+                            }
+                        }
+                    }
                     // After completion, wait for user input
                     cout << "\nPress enter to continue\n\n";
                     char input[2];
@@ -291,4 +363,6 @@ void debug_sata_controller() {
         }
     }
     cout << "Debug complete\n";
+
+
 }

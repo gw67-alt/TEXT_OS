@@ -1,5 +1,7 @@
-cin >>, acts as getline, perhaps an oversimplification...
+cin >> input, acts as getline, perhaps an oversimplification...
 
 limitations are: cin cannot directly accept int, use atoi
 
-TODO fix real hardware implementation glitch, works on vmware!
+SATA read/write data works on VMware and real hardware.
+
+TODO: implement a filesystem

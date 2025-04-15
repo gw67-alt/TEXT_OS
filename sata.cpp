@@ -5,10 +5,10 @@
 #include "kernel.h"
 #include "iostream_wrapper.h"
 #include "pci.h"
-#include "stdlib_hooks.h"
-#include "identify.h"
+#include "stdlib_hooks.h" // Assumed to provide basic utilities if needed
+#include "identify.h"       // Includes the string R/W functions now
 
- // AHCI registers offsets
+ // AHCI registers offsets (Keep these definitions)
 #define AHCI_CAP        0x00  // Host Capabilities
 #define AHCI_GHC        0x04  // Global Host Control
 #define AHCI_IS         0x08  // Interrupt Status
@@ -34,17 +34,18 @@
 #define PORT_CI         0x38  // Command Issue
 
 
-// Function to print hex value with label
+// Function to print hex value with label (Keep this function)
 void print_hex(const char* label, uint32_t value) {
     cout << label;
 
     // Convert to hex
     char hex_chars[16] = { '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F' };
-    char buffer[10];
+    char buffer[11]; // Increased size for 0x + 8 digits + null
 
     buffer[0] = '0';
     buffer[1] = 'x';
 
+    // Fill from right to left for potentially shorter numbers if desired, but fixed 8 is fine too.
     for (int i = 0; i < 8; i++) {
         uint8_t nibble = (value >> (28 - i * 4)) & 0xF;
         buffer[2 + i] = hex_chars[nibble];
@@ -54,7 +55,47 @@ void print_hex(const char* label, uint32_t value) {
     cout << buffer << "\n";
 }
 
-// Function to decode port status
+// Helper to print 64-bit hex
+void print_hex64(const char* label, uint64_t value) {
+    cout << label;
+    char hex_chars[16] = { '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F' };
+    char buffer[19]; // 0x + 16 digits + null
+
+    buffer[0] = '0';
+    buffer[1] = 'x';
+    for (int i = 0; i < 16; i++) {
+        uint8_t nibble = (value >> (60 - i * 4)) & 0xF;
+        buffer[2 + i] = hex_chars[nibble];
+    }
+    buffer[18] = '\0';
+    cout << buffer << "\n";
+}
+
+
+// Simple string to unsigned int conversion (basic, no error checking)
+// Assumes valid decimal number input.
+unsigned int simple_stou(const char* str) {
+    unsigned int res = 0;
+    while (*str >= '0' && *str <= '9') {
+        res = res * 10 + (*str - '0');
+        str++;
+    }
+    return res;
+}
+
+// Simple string to unsigned long long conversion (basic, no error checking)
+// Assumes valid decimal number input.
+uint64_t simple_stoull(const char* str) {
+    uint64_t res = 0;
+    while (*str >= '0' && *str <= '9') {
+        res = res * 10 + (*str - '0');
+        str++;
+    }
+    return res;
+}
+
+
+// Function to decode port status (Keep this function)
 void decode_port_status(uint32_t ssts) {
     uint8_t det = ssts & 0xF;
     uint8_t ipm = (ssts >> 8) & 0xF;
@@ -81,20 +122,25 @@ void decode_port_status(uint32_t ssts) {
     cout << "\n";
 }
 
-// Function to decode task file data
+// Function to decode task file data (Keep this function)
 void decode_task_file(uint32_t tfd) {
     uint8_t status = tfd & 0xFF;
     uint8_t error = (tfd >> 8) & 0xFF;
 
     cout << "  Status register: ";
-    if (status & 0x80) cout << "BSY ";
-    if (status & 0x40) cout << "DRDY ";
-    if (status & 0x20) cout << "DF ";
-    if (status & 0x10) cout << "DSC ";
-    if (status & 0x08) cout << "DRQ ";
-    if (status & 0x04) cout << "CORR ";
-    if (status & 0x02) cout << "IDX ";
-    if (status & 0x01) cout << "ERR ";
+    if (status == 0 && error == 0) {
+        cout << "(No error reported)"; // Avoid printing nothing if status is 0
+    }
+    else {
+        if (status & 0x80) cout << "BSY ";
+        if (status & 0x40) cout << "DRDY ";
+        if (status & 0x20) cout << "DF ";
+        if (status & 0x10) cout << "DSC ";
+        if (status & 0x08) cout << "DRQ ";
+        if (status & 0x04) cout << "CORR ";
+        if (status & 0x02) cout << "IDX ";
+        if (status & 0x01) cout << "ERR ";
+    }
     cout << "\n";
 
     if (status & 0x01) {
@@ -111,7 +157,7 @@ void decode_task_file(uint32_t tfd) {
     }
 }
 
-// Function to decode port command register
+// Function to decode port command register (Keep this function)
 void decode_port_cmd(uint32_t cmd) {
     cout << "  Command register: ";
     if (cmd & 0x0001) cout << "ST ";
@@ -133,10 +179,17 @@ void debug_sata_controller() {
     // Find AHCI controller via PCI
     uint64_t ahci_base = 0;
     uint16_t bus, dev, func;
+    uint16_t ahci_bus = 0, ahci_dev = 0, ahci_func = 0; // Store location
 
     for (bus = 0; bus < 256 && !ahci_base; bus++) {
-        for (dev = 0; dev < 8 && !ahci_base; dev++) {
+        for (dev = 0; dev < 32 && !ahci_base; dev++) {
             for (func = 0; func < 8 && !ahci_base; func++) {
+                // Check if device exists first (Vendor ID != 0xFFFF)
+                uint32_t vendor_device_check = pci_read_config_dword(bus, dev, func, 0x00);
+                if ((vendor_device_check & 0xFFFF) == 0xFFFF) {
+                    continue; // No device here
+                }
+
                 uint32_t class_reg = pci_read_config_dword(bus, dev, func, 0x08);
                 uint8_t class_code = (class_reg >> 24) & 0xFF;
                 uint8_t subclass = (class_reg >> 16) & 0xFF;
@@ -144,59 +197,42 @@ void debug_sata_controller() {
 
                 if (class_code == 0x01 && subclass == 0x06 && prog_if == 0x01) {
                     uint32_t bar5 = pci_read_config_dword(bus, dev, func, 0x24);
-                    ahci_base = bar5 & ~0xF;
+                    // Check if BAR5 is memory mapped and non-zero
+                    if ((bar5 & 0x1) == 0 && (bar5 & ~0xF) != 0) {
+                        ahci_base = bar5 & ~0xF;
+                        ahci_bus = bus;
+                        ahci_dev = dev;
+                        ahci_func = func;
 
-                    cout << "Found AHCI controller at PCI ";
-                    cout << (int)bus << ":" << (int)dev << ":" << (int)func << "\n";
+                        cout << "Found AHCI controller at PCI ";
+                        cout << (int)bus << ":" << (int)dev << "." << (int)func << "\n"; // Use dot separator common practice
 
-                    // Get vendor and device ID
-                    uint32_t vendor_device = pci_read_config_dword(bus, dev, func, 0x00);
-                    uint16_t vendor_id = vendor_device & 0xFFFF;
-                    uint16_t device_id = (vendor_device >> 16) & 0xFFFF;
+                        // Get vendor and device ID
+                        uint32_t vendor_device = pci_read_config_dword(bus, dev, func, 0x00);
+                        uint16_t vendor_id = vendor_device & 0xFFFF;
+                        uint16_t device_id = (vendor_device >> 16) & 0xFFFF;
 
-                    cout << "Vendor ID: ";
-                    char v_buffer[5];
-                    for (int i = 0; i < 4; i++) {
-                        uint8_t nibble = (vendor_id >> (12 - i * 4)) & 0xF;
-                        v_buffer[i] = nibble < 10 ? '0' + nibble : 'A' + (nibble - 10);
+                        // Use print_hex for consistency (need to adapt for 16-bit)
+                        print_hex(" Vendor ID: ", vendor_id); // Assuming print_hex handles width ok
+                        print_hex(" Device ID: ", device_id);
+
+                        cout << "\nPress enter to continue...\n\n";
+                        char input[2]; // Allow for potential newline char
+                        cin >> input; // Read a line to consume potential newline
                     }
-                    v_buffer[4] = '\0';
-                    cout << v_buffer << "\n";
-
-                    cout << "Device ID: ";
-                    char d_buffer[5];
-                    for (int i = 0; i < 4; i++) {
-                        uint8_t nibble = (device_id >> (12 - i * 4)) & 0xF;
-                        d_buffer[i] = nibble < 10 ? '0' + nibble : 'A' + (nibble - 10);
-                    }
-                    d_buffer[4] = '\0';
-                    cout << d_buffer << "\n";
-
-                    cout << "\nPress enter to continue\n\n";
-                    char input[1];
-                    cin >> input;
                 }
             }
         }
-
     }
 
     if (!ahci_base) {
-        cout << "No SATA controller found\n";
+        cout << "No AHCI controller found or BAR5 not valid.\n";
         return;
     }
 
-    // Print ABAR address
-    cout << "AHCI Base Address: ";
-    char hex_str[20];
-    for (int i = 15; i >= 0; i--) {
-        int digit = (ahci_base >> (i * 4)) & 0xF;
-        hex_str[15 - i] = digit < 10 ? '0' + digit : 'A' + (digit - 10);
-    }
-    hex_str[16] = '\0';
-    char* p = hex_str;
-    while (*p == '0' && *(p + 1) != '\0') p++;
-    cout << "0x" << p << "\n\n";
+    // Print ABAR address using helper
+    print_hex64("AHCI Base Address (ABAR): ", ahci_base);
+    cout << "\n";
 
     // Read and print AHCI global registers
     uint32_t cap = read_mem32(ahci_base + AHCI_CAP);
@@ -205,18 +241,20 @@ void debug_sata_controller() {
     uint32_t pi = read_mem32(ahci_base + AHCI_PI);
     uint32_t vs = read_mem32(ahci_base + AHCI_VS);
 
-    print_hex("Capabilities: ", cap);
-    print_hex("Global Host Control: ", ghc);
-    print_hex("Interrupt Status: ", is);
-    print_hex("Ports Implemented: ", pi);
-    print_hex("Version: ", vs);
+    print_hex("Capabilities (CAP):       ", cap);
+    print_hex("Global Host Control (GHC):", ghc);
+    print_hex("Interrupt Status (IS):    ", is);
+    print_hex("Ports Implemented (PI):   ", pi);
+    print_hex("Version (VS):             ", vs);
 
     // Check if AHCI mode is enabled
-    cout << "AHCI Mode: " << ((ghc & 0x80000000) ? "Enabled" : "Disabled") << "\n\n";
+    cout << "AHCI Mode (GHC.AE):       " << ((ghc & 0x80000000) ? "Enabled" : "Disabled") << "\n\n";
 
     // Get number of ports and scan each implemented port
     cout << "Port Status:\n";
+    cout << "------------\n";
 
+    bool any_device_found = false;
     for (int i = 0; i < 8; i++) {
         if (pi & (1 << i)) {
             uint64_t port_addr = ahci_base + AHCI_PORT_BASE + (i * AHCI_PORT_SIZE);
@@ -231,11 +269,11 @@ void debug_sata_controller() {
             uint32_t serr = read_mem32(port_addr + PORT_SERR);
 
             // Print raw values
-            print_hex("  SSTS: ", ssts);
-            print_hex("  TFD: ", tfd);
-            print_hex("  SIG: ", sig);
-            print_hex("  CMD: ", cmd);
-            print_hex("  SERR: ", serr);
+            print_hex("  SSTS (SATA Status):   ", ssts);
+            print_hex("  TFD (Task File Data): ", tfd);
+            print_hex("  SIG (Signature):      ", sig);
+            print_hex("  CMD (Command/Status): ", cmd);
+            print_hex("  SERR (SATA Error):    ", serr);
 
             // Decode port status
             decode_port_status(ssts);
@@ -244,125 +282,170 @@ void debug_sata_controller() {
 
             // Check signature to identify device type
             cout << "  Device type: ";
-            if (sig == 0x00000101) {
-                cout << "SATA drive";
+            bool is_sata_drive = (sig == 0x00000101);
+            if (is_sata_drive) {
+                cout << "SATA Drive (Non-ATAPI)";
+                any_device_found = true;
             }
             else if (sig == 0xEB140101) {
-                cout << "ATAPI device";
+                cout << "SATAPI Drive (ATAPI)";
+                any_device_found = true; // Can still potentially read/write using ATAPI commands
             }
             else if (sig == 0xC33C0101) {
-                cout << "Enclosure management bridge";
+                cout << "Enclosure Management Bridge (SEMB)";
             }
             else if (sig == 0x96690101) {
-                cout << "Port multiplier";
+                cout << "Port Multiplier";
             }
             else {
-                cout << "Unknown device";
+                // Check detection status again
+                uint8_t det = ssts & 0xF;
+                if (det == 0 || det == 4) {
+                    cout << "No Device Detected";
+                }
+                else {
+                    print_hex("Unknown Device Signature: ", sig);
+                }
             }
-            cout << "\nPress enter to continue\n\n";
-            char input[1];
+            cout << "\n";
+
+            // Print Command List Base Address and FIS Base Address if FRE or ST is set
+            if (cmd & (HBA_PORT_CMD_FRE | HBA_PORT_CMD_ST)) {
+                uint64_t clb = ((uint64_t)read_mem32(port_addr + PORT_CLBU) << 32) | read_mem32(port_addr + PORT_CLB);
+                uint64_t fb = ((uint64_t)read_mem32(port_addr + PORT_FBU) << 32) | read_mem32(port_addr + PORT_FB);
+                print_hex64("  Command List Base (CLB):", clb);
+                print_hex64("  FIS Base (FB):          ", fb);
+            }
+
+
+            cout << "\nPress enter to continue...\n\n";
+            char input[2];
             cin >> input;
         }
     }
 
-    // Add option to send identify commands
-    cout << "\nDo you want to send IDENTIFY commands to ports? (y/n): ";
-    char response[2];
-    cin >> response;
+    // --- IDENTIFY Command Section ---
+    if (any_device_found) { // Only offer if we found something plausible
+        cout << "\nSend IDENTIFY commands to detected SATA/SATAPI devices? (y/n): ";
+        char response[4]; // Increase size for safety
+        cin >> response;
 
-    if (response[0] == 'y' || response[0] == 'Y') {
-        // Use the ahci_base that was already found and used in the function
-        // Now check each implemented port
-        for (int i = 0; i < 8; i++) {
-            if (pi & (1 << i)) {
-                cout << "Send IDENTIFY to port " << i << "? (y/n): ";
-                char port_response[2];
-                cin >> port_response;
+        if (response[0] == 'y' || response[0] == 'Y') {
+            for (int i = 0; i < 8; i++) {
+                if (pi & (1 << i)) {
+                    uint64_t port_addr = ahci_base + AHCI_PORT_BASE + (i * AHCI_PORT_SIZE);
+                    uint32_t sig = read_mem32(port_addr + PORT_SIG);
+                    // Only try IDENTIFY on plausible devices (SATA/SATAPI) and if communication seems established
+                    uint32_t ssts = read_mem32(port_addr + PORT_SSTS);
+                    uint8_t det = ssts & 0xF;
 
-                if (port_response[0] == 'y' || port_response[0] == 'Y') {
-                    send_identify_command(ahci_base, i);
-                    while (true) {
-                        cout << "\nDo you want to do data operations on disk? (y/n): ";
-                        cin >> response;
-                        if (response[0] == 'n' || response[0] == 'N') {
-                            break;
-                        }
-                        if (response[0] == 'y' || response[0] == 'Y') {
+                    if ((sig == 0x00000101 || sig == 0xEB140101) && det == 3) {
+                        cout << "Send IDENTIFY to port " << i << "? (y/n): ";
+                        char port_response[4];
+                        cin >> port_response;
 
-
-                            uint64_t test_lba = 0;
-
-                            uint16_t test_sector_count = 1; // Test with a single sector
-                            char LBA_TEST[512];
-
-                            cout << "\nDo you want to read/write data from disk? (r/w): ";
-                            cin >> response;
-                            if (response[0] == 'r' || response[0] == 'R') {
-                                cout << "Enter LBA number: ";
-
-                                cin >> LBA_TEST;
-                                test_lba = str_int(LBA_TEST);
-
-                                // --- Stage 3: Read back data ---
-                                cout << "\nStage 3: Reading back data from LBA " << (unsigned int)test_lba << "...\n";
-                                // Clear buffer with different pattern before reading back
-                                for (int i = 0; i < test_sector_count * 512; ++i) rw_data_buffer[i] = 0xFF;
-
-                                int read_status2 = read_sectors_ahci(ahci_base, i, test_lba, test_sector_count, rw_data_buffer);
-                                if (read_status2 != 0) {
-                                    cout << "ERROR: Stage 3 read back failed with status " << read_status2 << ". Cannot verify write.\n";
-                                    return;
-                                }
-                                cout << "Stage 3 read back succeeded. 512 bytes: ";
-                                for (int k = 0; k < 512; ++k) {
-                                    char c = rw_data_buffer[k];
-                                    // Check if the character is printable
-                                    if (c >= 32 && c <= 126) {
-                                        cout << c;
-                                    }
-                                    else {
-                                        // For non-printable characters, print a placeholder
-                                        cout << "· ";
-                                    }
-                                }
+                        if (port_response[0] == 'y' || port_response[0] == 'Y') {
+                            int result = send_identify_command(ahci_base, i);
+                            if (result == 0) {
+                                cout << "IDENTIFY command for port " << i << " succeeded.\n";
                             }
-                            if (response[0] == 'w' || response[0] == 'W') {
-
-
-                                cout << "Enter LBA number: ";
-
-                                cin >> LBA_TEST;
-                                test_lba = str_int(LBA_TEST);
-
-
-                                char str[512];
-
-                                cout << "Enter data: ";
-                                cin >> str;
-                                int str_len = strlen(str);
-
-                                // Copy the string to the beginning of the buffer
-                                memcpy(rw_data_buffer, str, str_len);
-
-                                // Fill the rest with zeros or another pattern
-                                for (int i = str_len; i < test_sector_count * 512; ++i) {
-                                    rw_data_buffer[i] = ' '; // or any other value
-                                }
-
-
-                                write_sectors_ahci(ahci_base, i, test_lba, test_sector_count, rw_data_buffer);
+                            else {
+                                cout << "IDENTIFY command for port " << i << " failed (Error code: " << result << ").\n";
                             }
+                            cout << "\nPress enter to continue...\n\n";
+                            char input[2];
+                            cin >> input;
                         }
                     }
-                    // After completion, wait for user input
-                    cout << "\nPress enter to continue\n\n";
-                    char input[2];
-                    cin >> input;
                 }
             }
         }
     }
-    cout << "Debug complete\n";
+    else {
+        cout << "\nNo active SATA/SATAPI devices found, skipping IDENTIFY command option.\n";
+    }
 
 
+    // --- Sector String Read/Write Section ---
+    if (any_device_found) {
+        cout << "\nPerform sector string read/write operations? (y/n): ";
+        char rw_response[4];
+        cin >> rw_response;
+
+        if (rw_response[0] == 'y' || rw_response[0] == 'Y') {
+            while (true) {
+                cout << "\nSector R/W Menu:\n";
+                cout << "Enter port number (0-31) or 'q' to quit: ";
+                char port_input[8];
+                cin >> port_input;
+                if (port_input[0] == 'q' || port_input[0] == 'Q') break;
+
+                int port_num = simple_stou(port_input);
+                if (port_num > 31 || !(pi & (1 << port_num))) {
+                    cout << "Invalid or unimplemented port number.\n";
+                    continue;
+                }
+
+                // Check if port has a device suitable for R/W
+                uint64_t port_addr = ahci_base + AHCI_PORT_BASE + (port_num * AHCI_PORT_SIZE);
+                uint32_t sig = read_mem32(port_addr + PORT_SIG);
+                uint32_t ssts = read_mem32(port_addr + PORT_SSTS);
+                uint8_t det = ssts & 0xF;
+                if (!((sig == 0x00000101 || sig == 0xEB140101) && det == 3)) {
+                    cout << "Port " << port_num << " does not have an active SATA/SATAPI device suitable for R/W.\n";
+                    continue;
+                }
+
+
+                cout << "Enter LBA (sector number, decimal): ";
+                char lba_input[24]; // Enough for 64-bit decimal
+                cin >> lba_input;
+                uint64_t lba = simple_stoull(lba_input);
+
+                cout << "Action: 'r' to Read string, 'w' to Write string: ";
+                char action_input[4];
+                cin >> action_input;
+
+                if (action_input[0] == 'w' || action_input[0] == 'W') {
+                    //cout << "\n *** WARNING: Writing to LBA " << (unsigned long long)lba << " on port " << port_num << " is potentially DANGEROUS! ***\n";
+                    //cout << " *** Especially LBA 0 often contains critical boot/partition data. ***\n";
+                    cout << "Enter string to write (max " << SECTOR_SIZE - 1 << " chars, spaces allowed): ";
+                    char write_buffer[SECTOR_SIZE]; // Buffer to hold user input
+                    cin >>write_buffer;
+
+                    int result = write_string_to_sector(ahci_base, port_num, lba, write_buffer);
+                    if (result == 0) {
+                        cout << "Write successful.\n";
+                    }
+
+                }
+                else if (action_input[0] == 'r' || action_input[0] == 'R') {
+                    char read_buffer[SECTOR_SIZE + 1]; // +1 for null terminator safety
+                    int result = read_string_from_sector(ahci_base, port_num, lba, read_buffer, sizeof(read_buffer));
+
+                    if (result >= 0) { // 0 for success, 1 for truncated
+                        //cout << "Read successful. Data from LBA " << (unsigned long long)lba << ":\n";
+                        cout << "--------------------------------------------------\n";
+                        cout << read_buffer << "\n";
+                        cout << "--------------------------------------------------\n";
+                        if (result == 1) {
+                            cout << "(Note: String may have been truncated if it exceeded buffer size or lacked null terminator within sector)\n";
+                        }
+                    }
+                    else {
+                        cout << "Read failed (Error code: " << result << ").\n";
+                    }
+                }
+                else {
+                    cout << "Invalid action.\n";
+                }
+                cout << "\nPress enter to continue...\n\n";
+                char input[2];
+                cin >> input;
+            } // end while loop
+        }
+    }
+
+
+    cout << "\nSATA Controller Debug complete.\n";
 }

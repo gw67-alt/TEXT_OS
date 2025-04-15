@@ -6,6 +6,7 @@
 #include "iostream_wrapper.h"
 #include "pci.h"
 #include "stdlib_hooks.h"
+#include "identify.h"
 
  // AHCI registers offsets
 #define AHCI_CAP        0x00  // Host Capabilities
@@ -32,10 +33,6 @@
 #define PORT_SACT       0x34  // SATA Active
 #define PORT_CI         0x38  // Command Issue
 
-// Simple memory access
-inline uint32_t read_mem32(uint64_t addr) {
-    return *((volatile uint32_t*)addr);
-}
 
 // Function to print hex value with label
 void print_hex(const char* label, uint32_t value) {
@@ -268,5 +265,30 @@ void debug_sata_controller() {
         }
     }
 
+    // Add option to send identify commands
+    cout << "\nDo you want to send IDENTIFY commands to ports? (y/n): ";
+    char response[2];
+    cin >> response;
+
+    if (response[0] == 'y' || response[0] == 'Y') {
+        // Use the ahci_base that was already found and used in the function
+        // Now check each implemented port
+        for (int i = 0; i < 32; i++) {
+            if (pi & (1 << i)) {
+                cout << "Send IDENTIFY to port " << i << "? (y/n): ";
+                char port_response[2];
+                cin >> port_response;
+
+                if (port_response[0] == 'y' || port_response[0] == 'Y') {
+                    send_identify_command(ahci_base, i);
+
+                    // After completion, wait for user input
+                    cout << "\nPress enter to continue\n\n";
+                    char input[2];
+                    cin >> input;
+                }
+            }
+        }
+    }
     cout << "Debug complete\n";
 }

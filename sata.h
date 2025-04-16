@@ -86,8 +86,6 @@
 
 // Function prototypes
 
-
-void crypt();
 /**
  * Simple memory access to read 32-bit value
  * @param addr Physical memory address to read from
@@ -159,4 +157,5 @@ int is_device_present(uint8_t port_num);
  * @return Device type based on signature (1=ATA, 2=ATAPI, 3=SEMB, 4=PM, 0=unknown/none)
  */
 int get_device_type(uint8_t port_num);
+
 #endif // SATA_H

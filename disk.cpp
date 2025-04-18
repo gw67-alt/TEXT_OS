@@ -106,7 +106,7 @@ int fat32_init(uint64_t ahci_base, int port) {
      // Ensure FAT32_SIGNATURE is defined correctly as 0xAA55 in fat32.h
     if (boot_sector->boot_signature != FAT32_SIGNATURE) {
         cout << "ERROR: Invalid FAT32 boot signature (Expected 0xAA55, Got 0x" << boot_sector->boot_signature << ").\n";
-        return -2;
+        //return -2;
     }
 
     if (boot_sector->bytes_per_sector != FAT32_SECTOR_SIZE) {

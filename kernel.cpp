@@ -11,10 +11,8 @@
 #include "disk.h"
 
 // Global variables declarations (but not initialized here)
-uint32_t dir_cluster = 2; // Typically, the root directory in FAT32 starts at cluster 2
 char buffer[4096]; // Define a buffer to read/write data
 size_t buffer_size = sizeof(buffer);
-size_t bytes_read = 0;
 uint64_t ahci_base; // Will be initialized in kernel_main
 
 /* Command implementations */
@@ -40,15 +38,7 @@ void cmd_help() {
 /* File operation commands */
 void cmd_read_file() {
     cout << "Reading file TEST.TXT...\n";
-    bytes_read = 0;
-    int result = fat32_read_file(ahci_base, 0, dir_cluster, "TEST.TXT", buffer, buffer_size, &bytes_read);
     
-    if (result == 0) {
-        cout << "Read successful. Bytes read: " << bytes_read << "\n";
-        cout << "File content: " << buffer << "\n";
-    } else {
-        cout << "Error reading file. Error code: " << result << "\n";
-    }
 }
 
 void cmd_write_file() {
@@ -60,14 +50,7 @@ void cmd_write_file() {
         write_size = buffer_size;
     }
     
-    cout << "Writing " << write_size << " bytes to TEST.TXT...\n";
-    int result = fat32_write_file(ahci_base, 0, dir_cluster, "TEST.TXT", buffer, write_size);
     
-    if (result == 0) {
-        cout << "Write successful.\n";
-    } else {
-        cout << "Error writing file. Error code: " << result << "\n";
-    }
 }
 
 /* Command processing function */
@@ -111,10 +94,6 @@ void command_prompt() {
         } else if (cmd == "read") {
             cmd_read_file();
         } else if (cmd == "write") {
-            cmd_write_file();
-        } else if (cmd == "readtest") {
-            cmd_read_file();
-        } else if (cmd == "writetest") {
             cmd_write_file();
         }
         else {

@@ -3,6 +3,16 @@
 #include "types.h"
 #include "pci.h"
 
+// --- Assumed Includes and Definitions (Normally in Headers) ---
+#include <stdint.h>         // For uintXX_t types
+#include <stddef.h>         // For NULL, size_t
+#include <stdbool.h>        // For bool type
+#include "stdlib_hooks.h"       // Includes the string R/W functions now
+
+#include "iostream_wrapper.h" // Include your bare-metal cout wrapper
+#include "identify.h"            // Include FAT32 specific definitions (structs, constants)
+
+
 /**
  * SATA Controller Module
  * For bare metal AMD64 environment
@@ -194,20 +204,29 @@ int get_device_type(uint8_t port_num);
 #define PORT_SACT       0x34  // SATA Active
 #define PORT_CI         0x38  // Command Issue
 
-/*
- * FAT32 Implementation for Bare Metal AMD64
- * Builds on SATA Controller code from identify.h
- */
 
- // --- Assumed Includes and Definitions (Normally in Headers) ---
-#include <stdint.h>         // For uintXX_t types
-#include <stddef.h>         // For NULL, size_t
-#include <stdbool.h>        // For bool type
-#include "stdlib_hooks.h"       // Includes the string R/W functions now
 
-#include "iostream_wrapper.h" // Include your bare-metal cout wrapper
-#include "fat32.h"            // Include FAT32 specific definitions (structs, constants)
-#include "identify.h"            // Include FAT32 specific definitions (structs, constants)
+// Function to print hex value with label (Keep this function)
+void print_hex(const char* label, uint32_t value) {
+    cout << label;
+
+    // Convert to hex
+    char hex_chars[16] = { '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F' };
+    char buffer[11]; // Increased size for 0x + 8 digits + null
+
+    buffer[0] = '0';
+    buffer[1] = 'x';
+
+    // Fill from right to left for potentially shorter numbers if desired, but fixed 8 is fine too.
+    for (int i = 0; i < 8; i++) {
+        uint8_t nibble = (value >> (28 - i * 4)) & 0xF;
+        buffer[2 + i] = hex_chars[nibble];
+    }
+    buffer[10] = '\0';
+
+    cout << buffer << "\n";
+}
+
 
 
 

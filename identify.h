@@ -1009,7 +1009,7 @@ int read_sectors(uint64_t ahci_base, int port, uint64_t lba, uint16_t count, voi
         return complete_status;
     }
 
-    cout << "Read command completed successfully.\n";
+    //cout << "Read command completed successfully.\n";
     return 0; // Success
 }
 
@@ -1144,7 +1144,7 @@ int write_sectors(uint64_t ahci_base, int port, uint64_t lba, uint16_t count, vo
     // Implementation similar to read/write but with different command code and PRDTL=0.
     // Example: send_flush_cache_command(ahci_base, port);
 
-    cout << "Write command completed successfully.\n";
+    //cout << "Write command completed successfully.\n";
     return 0; // Success
 }
 

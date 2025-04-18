@@ -23,9 +23,10 @@ void cmd_help() {
     cout << "  features     - Display CPU features\n";
     cout << "  pstates      - Display P-States information\n";
     cout << "  full         - Display all hardware information\n";
+	cout << "  fs     		- Run filesystem debug\n";
+
     cout << "  program1     - Run test program 1\n";
     cout << "  program2     - Run test program 2\n";
-    cout << "  debugsata     - Run sata debug\n";
 
 }
  
@@ -67,8 +68,8 @@ void cmd_help() {
             print_prog2();
          } else if (cmd == "pciscan") {
             scan_pci();
-         } else if (cmd == "debugsata") {
-             debug_sata_controller();
+         } else if (cmd == "fs") {
+             fs();
          }
          }
      }

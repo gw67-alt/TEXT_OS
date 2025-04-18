@@ -4,4 +4,4 @@ limitations are: cin cannot directly accept int, use atoi
 
 SATA read/write data works on VMware and real hardware.
 
-TODO: implement a filesystem
+TODO: transfer the sata ahci address and port to the kernel to enable easy file operations.

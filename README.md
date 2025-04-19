@@ -4,4 +4,4 @@ limitations are: cin cannot directly accept int, use atoi
 
 SATA read/write data works on VMware and real hardware.
 
-TODO: transfer the sata ahci address and port to the kernel to enable easy file operations.
+Filesystem test: make a dir command to list filenames and LBAs for each file(FAT), use read sectors. preserve some bytes in sector for possible end of chain byte. directories use LBA groupings with an end of directory byte.

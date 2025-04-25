@@ -4,4 +4,4 @@ limitations are: cin cannot directly accept int, use atoi
 
 SATA read/write data works on VMware and real hardware.
 
-TODO: basic filesystem & read/write/execute memory with editor
+TODO: basic filesystem

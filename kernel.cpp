@@ -1,3 +1,4 @@
+
 #include "terminal_hooks.h"
 #include "terminal_io.h"
 #include "iostream_wrapper.h"
@@ -33,24 +34,93 @@ void cmd_help() {
     cout << "  program2     - Run test program 2\n";
     cout << "  read         - Read test file\n";
     cout << "  write        - Write to test file\n";
+    cout << "  readmem      - Read memory\n";
+    cout << "  writemem     - Write to memory\n";
 }
 
-/* File operation commands */
-void cmd_read_file() {
-    cout << "Reading file TEST.TXT...\n";
-    
-}
+void cmd_read_memory() {
+    uint32_t address = 0;
+    size_t size = 0;
+    char address_str[20];
+    char size_str[20];
 
-void cmd_write_file() {
-    cout << "Enter text to write to TEST.TXT (max 4096 chars): ";
-    cin >> buffer;
+    cout << "Enter memory address to read (in hexadecimal): 0x";
+    cin >> address_str;
     
-    size_t write_size = strlen(buffer);
-    if (write_size > buffer_size) {
-        write_size = buffer_size;
+    // Convert hex string to uint32_t manually
+    for (int i = 0; address_str[i] != '\0'; i++) {
+        char c = address_str[i];
+        address = address << 4; // Shift left by 4 bits (multiply by 16)
+        
+        if (c >= '0' && c <= '9') {
+            address |= (c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+            address |= (c - 'a' + 10);
+        } else if (c >= 'A' && c <= 'F') {
+            address |= (c - 'A' + 10);
+        }
     }
     
+    cout << "Enter number of bytes to read: ";
+    cin >> size_str;
     
+    // Convert decimal string to size_t
+    for (int i = 0; size_str[i] != '\0'; i++) {
+        if (size_str[i] >= '0' && size_str[i] <= '9') {
+            size = size * 10 + (size_str[i] - '0');
+        }
+    }
+
+    cout << "Memory at " << std::hex << address << ":\n";
+    for (size_t i = 0; i < size; ++i) {
+        cout << std::hex << (int)*((uint8_t*)(address + i)) << " ";
+    }
+    cout << std::dec << "\n";
+}
+
+void cmd_write_memory() {
+    uint32_t address = 0;
+    uint8_t value = 0;
+    char address_str[20];
+    char value_str[5];
+
+    cout << "Enter memory address to write to (in hexadecimal): 0x";
+    cin >> address_str;
+    
+    // Convert hex string to uint32_t manually
+    for (int i = 0; address_str[i] != '\0'; i++) {
+        char c = address_str[i];
+        address = address << 4; // Shift left by 4 bits (multiply by 16)
+        
+        if (c >= '0' && c <= '9') {
+            address |= (c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+            address |= (c - 'a' + 10);
+        } else if (c >= 'A' && c <= 'F') {
+            address |= (c - 'A' + 10);
+        }
+    }
+    
+    cout << "Enter byte value to write (in hexadecimal): 0x";
+    cin >> value_str;
+    
+    // Convert hex string to uint8_t
+    for (int i = 0; value_str[i] != '\0'; i++) {
+        char c = value_str[i];
+        value = value << 4; // Shift left by 4 bits (multiply by 16)
+        
+        if (c >= '0' && c <= '9') {
+            value |= (c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+            value |= (c - 'a' + 10);
+        } else if (c >= 'A' && c <= 'F') {
+            value |= (c - 'A' + 10);
+        }
+    }
+
+    *((uint8_t*)address) = value;
+
+    cout << "Value " << std::hex << (int)value << " written to address " << address << std::dec << "\n";
 }
 
 /* Command processing function */
@@ -91,10 +161,10 @@ void command_prompt() {
             print_prog2();
         } else if (cmd == "pciscan") {
             scan_pci();
-        } else if (cmd == "read") {
-            cmd_read_file();
-        } else if (cmd == "write") {
-            cmd_write_file();
+        } else if (cmd == "readmem") {
+            cmd_read_memory();
+        } else if (cmd == "writemem") {
+            cmd_write_memory();
         }
         else {
             cout << "Unknown command: " << input << "\n";
@@ -102,6 +172,10 @@ void command_prompt() {
         }
     }
 }
+
+
+
+
 
 /* Main kernel entry point */
 extern "C" void kernel_main() {

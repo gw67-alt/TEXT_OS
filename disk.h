@@ -177,7 +177,6 @@ int get_device_type(uint8_t port_num);
 #include "pci.h"
 #include "stdlib_hooks.h" // Assumed to provide basic utilities if needed
 #include "identify.h"       // Includes the string R/W functions now
-#include "fat32.h"       // Includes the string R/W functions now
 
  // AHCI registers offsets (Keep these definitions)
 #define AHCI_CAP        0x00  // Host Capabilities

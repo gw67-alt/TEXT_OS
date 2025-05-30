@@ -4,4 +4,4 @@ limitations are: cin cannot directly accept int, use atoi
 
 SATA read/write string to sector function works on VMware and real hardware.
 
-TODO: basic filesystem, driver macros
+TODO: HEX->BAR->RAM driver interface.

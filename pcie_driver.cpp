@@ -537,3 +537,59 @@ uint8_t hex_string_to_uint8(const char* hex_str) {
     }
     return result;
 }
+
+
+
+
+void driver_cfg(char* input) {
+
+    DriverCommand cmd;
+    
+    
+    // Check for list command
+    if (my_strstr(input, "list") != nullptr) {
+        cout << "Detected PCIe devices:\n";
+        for (int i = 0; i < device_count; i++) {
+            print_pcie_device_info(&detected_devices[i]);
+        }
+        return;
+    }
+    
+    cout << "Debug: Received command: " << input << "\n";
+    
+    if (parse_driver_command(input, &cmd)) {
+        if (cmd.is_read) {
+            // Handle read operations
+            if (cmd.use_pcie) {
+                cout << "Reading from PCIe device " << (int)cmd.bus << ":" << (int)cmd.device 
+                     << ":" << (int)cmd.function << " offset " << std::hex << cmd.offset << std::dec << "\n";
+                uint8_t read_value = driver_pcie_read(cmd.bus, cmd.device, cmd.function, cmd.offset);
+                cout << "Read value: " << std::hex << (int)read_value << std::dec << "\n";
+            } else {
+                cout << "Reading from memory address " << std::hex << cmd.address << std::dec << "\n";
+                uint8_t read_value = driver_memory_read(cmd.address);
+                cout << "Read value: " << std::hex << (int)read_value << std::dec << "\n";
+            }
+        } else {
+            // Handle write operations
+            if (cmd.use_pcie) {
+                cout << "Writing " << std::hex << (int)cmd.value 
+                     << " to PCIe device " << (int)cmd.bus << ":" << (int)cmd.device 
+                     << ":" << (int)cmd.function << " offset " << cmd.offset << std::dec << "\n";
+                driver_pcie_write(cmd.bus, cmd.device, cmd.function, cmd.offset, cmd.value);
+            } else {
+                cout << "Writing " << std::hex << (int)cmd.value 
+                     << " to memory address " << cmd.address << std::dec << "\n";
+                driver_memory_write(cmd.address, cmd.value);
+            }
+        }
+        cout << "Driver command executed successfully.\n";
+    } else {
+        cout << "Invalid driver command format.\n";
+        cout << "Examples:\n";
+        cout << "  Write: driver >> 0xFF >> 0x1000\n";
+        cout << "  Read:  driver >> read >> 0x1000\n";
+        cout << "  PCIe:  driver >> 0xFF >> 0x1000 >> pcie:0:1:0:10\n";
+    }
+}
+

@@ -37,6 +37,7 @@ void cmd_help() {
     cout << "  readmem      - Read memory\n";
     cout << "  writemem     - Write to memory\n";
     cout << "  driver       - Driver command (memory/PCIe write)\n";
+    cout << "  dcfgtest     - OS driver test\n";
 }
 
 void cmd_read_memory() {
@@ -168,6 +169,8 @@ void command_prompt() {
             cmd_write_memory();
         } else if (cmd == "driver") {
             cmd_driver();  // Add the new driver command
+        } else if (cmd == "dcfgtest") {
+            driver_cfg("driver >> 0xFF >> 0xFF >> pcie:0:0:0:0");  // Add the new driver command
         }
         else {
             cout << "Unknown command: " << input << "\n";

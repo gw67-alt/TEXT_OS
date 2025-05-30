@@ -52,6 +52,7 @@ struct PCIeDevice {
 
 // Function declarations
 void init_pcie_driver();
+void driver_cfg(char* input);
 void cmd_driver();
 bool parse_driver_command(const char* input, DriverCommand* cmd);
 uint32_t pcie_config_read32(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset);

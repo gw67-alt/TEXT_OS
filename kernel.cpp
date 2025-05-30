@@ -21,7 +21,7 @@ void cmd_help() {
     cout << "Available commands:\n";
     cout << "  help         - Show this help message\n";
     cout << "  clear        - Clear the screen\n";
-    cout << "  pciscan      - Scan PCI devices\n";
+    cout << "  pciescan      - Scan PCI devices\n";
     cout << "  cpu          - Display CPU information\n";
     cout << "  memory       - Display memory configuration\n";
     cout << "  cache        - Display cache information\n";
@@ -161,7 +161,7 @@ void command_prompt() {
             print_prog();
         } else if (cmd == "program2") {
             print_prog2();
-        } else if (cmd == "pciscan") {
+        } else if (cmd == "pciescan") {
             scan_pci();
         } else if (cmd == "readmem") {
             cmd_read_memory();

@@ -37,8 +37,10 @@ $(MAIN):
 	gcc -c pci.cpp -ffreestanding -m32 -o pci.o 
 
 	gcc -c io_port.cpp -ffreestanding -m32 -o io_port.o 
+	
+	gcc -c pcie_driver.cpp -ffreestanding -m32 -o pcie_driver.o 
 
-	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o string.o types.o terminal_io.o terminal_hooks.o stdlib_hooks.o iostream_wrapper.o interrupts.o test.o test2.o hardware_specs.o io_port.o pci.o -lgcc
+	gcc -ffreestanding -m32 -nostdlib -o '$(MULTIBOOT)' -T linker.ld boot.o kernel.o string.o types.o terminal_io.o terminal_hooks.o stdlib_hooks.o iostream_wrapper.o interrupts.o test.o test2.o hardware_specs.o io_port.o pci.o pcie_driver.o  -lgcc
 
 	grub-mkrescue -o '$@' '$(ISODIR)'
 

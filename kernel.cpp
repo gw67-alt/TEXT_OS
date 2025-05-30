@@ -1,4 +1,3 @@
-
 #include "terminal_hooks.h"
 #include "terminal_io.h"
 #include "iostream_wrapper.h"
@@ -10,6 +9,7 @@
 #include "test.h"
 #include "test2.h"
 #include "disk.h"
+#include "pcie_driver.h"  // Add the new PCIe driver header
 
 // Global variables declarations (but not initialized here)
 char buffer[4096]; // Define a buffer to read/write data
@@ -36,6 +36,7 @@ void cmd_help() {
     cout << "  write        - Write to test file\n";
     cout << "  readmem      - Read memory\n";
     cout << "  writemem     - Write to memory\n";
+    cout << "  driver       - Driver command (memory/PCIe write)\n";
 }
 
 void cmd_read_memory() {
@@ -165,6 +166,8 @@ void command_prompt() {
             cmd_read_memory();
         } else if (cmd == "writemem") {
             cmd_write_memory();
+        } else if (cmd == "driver") {
+            cmd_driver();  // Add the new driver command
         }
         else {
             cout << "Unknown command: " << input << "\n";
@@ -172,10 +175,6 @@ void command_prompt() {
         }
     }
 }
-
-
-
-
 
 /* Main kernel entry point */
 extern "C" void kernel_main() {
@@ -186,10 +185,12 @@ extern "C" void kernel_main() {
     /* Initialize keyboard and timer interrupts */
     init_keyboard();
 
-
     cout << "Hello, kernel World!" << '\n';
     
     ahci_base = disk_init();
+    
+    // Initialize the PCIe driver
+    init_pcie_driver();
 
     cout << "Initialization complete. Start typing commands...\n";
 

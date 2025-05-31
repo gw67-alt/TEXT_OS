@@ -1,595 +1,405 @@
-#include "pcie_driver.h"
-#include "iostream_wrapper.h"
-#include "terminal_io.h"
-#include <stdint.h>
+#include "pcie_driver.h"      // Expected to contain DriverCommand, PCIeDevice struct definitions
+#include "iostream_wrapper.h" // For cout, cin, std::hex, std::dec
+#include "terminal_io.h"      // For terminal interaction
+#include <stdint.h>           // For uintN_t types
+#include <stddef.h>           // For size_t
 
-// Forward declarations
-uint8_t driver_pcie_read(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset);
-uint8_t driver_memory_read(uint32_t address);
-// Potentially others like driver_pcie_write, driver_memory_write if not in .h
-bool parse_pcie_specification(const char* pcie_start, DriverCommand* cmd); // Also for error 7 & 8
-
-// PCIe configuration mechanism addresses
+// --- Configuration Constants ---
 #define PCIE_CONFIG_ADDRESS 0xCF8
 #define PCIE_CONFIG_DATA    0xCFC
 
-// Global PCIe device list (simplified for demonstration)
+#define PCIE_CONFIG_VENDOR_ID   0x00 // Word
+#define PCIE_CONFIG_DEVICE_ID   0x02 // Word
+#define PCIE_CONFIG_COMMAND     0x04 // Word
+#define PCIE_CONFIG_STATUS      0x06 // Word
+#define PCIE_CONFIG_CLASS_REV   0x08 // DWord: [ClassCode(byte)|Subclass(byte)|ProgIF(byte)|RevisionID(byte)]
+#define PCIE_CONFIG_HEADER_TYPE 0x0E // Byte
+#define PCIE_CONFIG_BAR0        0x10 // DWord
+// ... other BARs ...
+
+#define PCIE_CMD_IO_ENABLE     0x0001
+#define PCIE_CMD_MEMORY_ENABLE 0x0002
+#define PCIE_CMD_BUS_MASTER    0x0004
+
+// --- Global Variables ---
 static PCIeDevice detected_devices[32];
 static int device_count = 0;
+#define MAX_RETURNED_READ_VALUES 16 // Max read values to collect from one multi-command string
 
-// Port I/O functions - inline assembly implementations
-static inline void outl(uint16_t port, uint32_t value) {
-    asm volatile("outl %0, %1" : : "a"(value), "Nd"(port));
-}
+// --- Forward Declarations ---
+bool parse_driver_command(const char* input, DriverCommand* cmd);
+uint8_t driver_pcie_read(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset);
+void driver_pcie_write(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset, uint8_t value);
+uint8_t driver_memory_read(uint32_t address);
+void driver_memory_write(uint32_t address, uint8_t value);
+void print_pcie_device_info(const PCIeDevice* dev);
+void pcie_scan_devices();
+static bool execute_parsed_driver_command(const DriverCommand* cmd, uint8_t* out_read_val, bool* was_read_op);
 
-static inline void outw(uint16_t port, uint16_t value) {
-    asm volatile("outw %0, %1" : : "a"(value), "Nd"(port));
-}
+// --- Low-Level Port I/O Functions (only if not already defined) ---
+#ifndef PORT_IO_DEFINED
+static inline void outl(uint16_t port, uint32_t value) { asm volatile("outl %0, %1" : : "a"(value), "Nd"(port)); }
+static inline void outw(uint16_t port, uint16_t value) { asm volatile("outw %0, %1" : : "a"(value), "Nd"(port)); }
+static inline uint32_t inl(uint16_t port) { uint32_t v; asm volatile("inl %1, %0" : "=a"(v) : "Nd"(port)); return v; }
+static inline uint16_t inw(uint16_t port) { uint16_t v; asm volatile("inw %1, %0" : "=a"(v) : "Nd"(port)); return v; }
+#endif
 
+// --- String Utility Functions ---
+static const char* my_strstr(const char* h, const char* n) { if(!h||!n)return 0;if(!*n)return h;for(;*h;h++){const char *ht=h,*nt=n;while(*ht&&*nt&&*ht==*nt){ht++;nt++;}if(!*nt)return h;}return 0;}
+static int my_strncmp(const char* s1,const char* s2,size_t n){for(size_t i=0;i<n;i++){if(s1[i]!=s2[i])return (unsigned char)s1[i]-(unsigned char)s2[i];if(s1[i]=='\0')break;}return 0;}
+static void safe_strncpy_line(char* d, const char* s, size_t n){if(n==0)return;size_t i=0;while(i<n-1&&s[i]!='\0'&&s[i]!='\n'&&s[i]!='\r'){d[i]=s[i];i++;}d[i]='\0';}
 
-static inline uint32_t inl(uint16_t port) {
-    uint32_t value;
-    asm volatile("inl %1, %0" : "=a"(value) : "Nd"(port));
-    return value;
-}
-
-static inline uint16_t inw(uint16_t port) {
-    uint16_t value;
-    asm volatile("inw %1, %0" : "=a"(value) : "Nd"(port));
-    return value;
-}
-
-
-// Custom string functions to avoid standard library dependencies
-static const char* my_strstr(const char* haystack, const char* needle) {
-    if (!needle || !*needle) return haystack;
-    
-    for (const char* h = haystack; *h; h++) {
-        const char* h_temp = h;
-        const char* n_temp = needle;
-        
-        while (*h_temp && *n_temp && *h_temp == *n_temp) {
-            h_temp++;
-            n_temp++;
-        }
-        
-        if (!*n_temp) return h;
-    }
-    return nullptr;
-}
-
-static int my_strncmp(const char* s1, const char* s2, size_t n) {
-    for (size_t i = 0; i < n; i++) {
-        if (s1[i] != s2[i]) {
-            return (unsigned char)s1[i] - (unsigned char)s2[i];
-        }
-        if (s1[i] == '\0') break;
-    }
-    return 0;
-}
-
-// Better string copying function
-static void my_strncpy(char* dest, const char* src, size_t n) {
-    size_t i = 0;
-    while (i < n - 1 && src[i] != '\0' && src[i] != ':' && src[i] != ' ' && src[i] != '>') {
-        dest[i] = src[i];
-        i++;
-    }
-    dest[i] = '\0';
-}
-
-void init_pcie_driver() {
-    cout << "Initializing PCIe Driver...\n";
-    device_count = 0;
-    
-    // Clear device list
-    for (int i = 0; i < 32; i++) {
-        detected_devices[i].valid = false;
-    }
-    
-    // Scan for PCIe devices
-    pcie_scan_devices();
-    cout << "PCIe Driver initialized. Found " << device_count << " devices.\n";
-}
-
-void cmd_driver() {
-    char input[256];
-    DriverCommand cmd;
-    
-    cout << "Driver Command Format:\n";
-    cout << "  Memory Write: driver >> 0x[VALUE] >> 0x[ADDRESS]\n";
-    cout << "  Memory Read:  driver >> read >> 0x[ADDRESS]\n";
-    cout << "  PCIe Write:   driver >> 0x[VALUE] >> 0x[ADDRESS] >> pcie:[BUS]:[DEV]:[FUNC]:[OFFSET]\n";
-    cout << "  PCIe Read:    driver >> read >> 0x[ADDRESS] >> pcie:[BUS]:[DEV]:[FUNC]:[OFFSET]\n";
-    cout << "  List:         driver >> list\n";
-    cout << "Enter driver command: ";
-    
-    // Read the full line including spaces
-    cin >> input;
-    
-    // Check for list command
-    if (my_strstr(input, "list") != nullptr) {
-        cout << "Detected PCIe devices:\n";
-        for (int i = 0; i < device_count; i++) {
-            print_pcie_device_info(&detected_devices[i]);
-        }
-        return;
-    }
-    
-    cout << "Debug: Received command: " << input << "\n";
-    
-    if (parse_driver_command(input, &cmd)) {
-        if (cmd.is_read) {
-            // Handle read operations
-            if (cmd.use_pcie) {
-                cout << "Reading from PCIe device " << (int)cmd.bus << ":" << (int)cmd.device 
-                     << ":" << (int)cmd.function << " offset " << std::hex << cmd.offset << std::dec << "\n";
-                uint8_t read_value = driver_pcie_read(cmd.bus, cmd.device, cmd.function, cmd.offset);
-                cout << "Read value: " << std::hex << (int)read_value << std::dec << "\n";
-            } else {
-                cout << "Reading from memory address " << std::hex << cmd.address << std::dec << "\n";
-                uint8_t read_value = driver_memory_read(cmd.address);
-                cout << "Read value: " << std::hex << (int)read_value << std::dec << "\n";
-            }
-        } else {
-            // Handle write operations
-            if (cmd.use_pcie) {
-                cout << "Writing " << std::hex << (int)cmd.value 
-                     << " to PCIe device " << (int)cmd.bus << ":" << (int)cmd.device 
-                     << ":" << (int)cmd.function << " offset " << cmd.offset << std::dec << "\n";
-                driver_pcie_write(cmd.bus, cmd.device, cmd.function, cmd.offset, cmd.value);
-            } else {
-                cout << "Writing " << std::hex << (int)cmd.value 
-                     << " to memory address " << cmd.address << std::dec << "\n";
-                driver_memory_write(cmd.address, cmd.value);
-            }
-        }
-        cout << "Driver command executed successfully.\n";
-    } else {
-        cout << "Invalid driver command format.\n";
-        cout << "Examples:\n";
-        cout << "  Write: driver >> 0xFF >> 0x1000\n";
-        cout << "  Read:  driver >> read >> 0x1000\n";
-        cout << "  PCIe:  driver >> 0xFF >> 0x1000 >> pcie:0:1:0:10\n";
-    }
-}
-
-bool parse_driver_command(const char* input, DriverCommand* cmd) {
-    // Initialize command structure
-    cmd->use_pcie = false;
-    cmd->is_read = false;
-    cmd->value = 0;
-    cmd->address = 0;
-    cmd->bus = 0;
-    cmd->device = 0;
-    cmd->function = 0;
-    cmd->offset = 0;
-    
-    cout << "Debug: Parsing command: '" << input << "'\n";
-    
-    // Skip whitespace and find "driver"
-    const char* driver_pos = my_strstr(input, "driver");
-    if (!driver_pos) {
-        cout << "Debug: 'driver' keyword not found\n";
-        return false;
-    }
-    
-    // Find first ">>" after "driver"
-    const char* first_arrow = my_strstr(driver_pos, ">>");
-    if (!first_arrow) {
-        cout << "Debug: No first >> found\n";
-        return false;
-    }
-    
-    // Check if this is a read command
-    const char* first_param_start = first_arrow + 2;
-    while (*first_param_start == ' ') first_param_start++; // Skip spaces
-    
-    if (my_strncmp(first_param_start, "read", 4) == 0) {
-        cmd->is_read = true;
-        cout << "Debug: Read command detected\n";
-        
-        // Find second ">>" for address
-        const char* second_arrow = my_strstr(first_param_start, ">>");
-        if (!second_arrow) {
-            cout << "Debug: No second >> found for read command\n";
-            return false;
-        }
-        
-        // Extract address (after second >>)
-        const char* addr_start = second_arrow + 2;
-        while (*addr_start == ' ') addr_start++; // Skip spaces
-        
-        // Check for PCIe specification (third >>)
-        const char* third_arrow = my_strstr(addr_start, ">>");
-        const char* addr_end;
-        
-        if (third_arrow) {
-            addr_end = third_arrow;
-            cout << "Debug: Found third >>, PCIe read command detected\n";
-        } else {
-            // Find end of address (space, null, or newline)
-            addr_end = addr_start;
-            while (*addr_end && *addr_end != ' ' && *addr_end != '\n' && *addr_end != '\r') {
-                addr_end++;
-            }
-            cout << "Debug: No third >>, memory read command\n";
-        }
-        
-        cout << "Debug: Address section: '";
-        for (const char* p = addr_start; p < addr_end && *p; p++) {
-            cout << *p;
-        }
-        cout << "'\n";
-        
-        if (addr_start[0] == '0' && (addr_start[1] == 'x' || addr_start[1] == 'X')) {
-            cmd->address = hex_string_to_uint32(addr_start + 2);
-            cout << "Debug: Parsed address: " << std::hex << cmd->address << std::dec << "\n";
-        } else {
-            cout << "Debug: Invalid address format\n";
-            return false;
-        }
-        
-        // Handle PCIe specification if present
-        if (third_arrow) {
-            if (!parse_pcie_specification(third_arrow + 2, cmd)) {
-                return false;
-            }
-        }
-        
-        cout << "Debug: Read command parsed successfully\n";
-        return true;
-    }
-    
-    // Handle write commands (original logic)
-    // Extract value (after first >>)
-    const char* value_start = first_param_start;
-    
-    // Find end of value (next >> or end of string)
-    const char* value_end = my_strstr(value_start, ">>");
-    if (!value_end) {
-        // No second >>, treat as simple memory command
-        // Find end of value by looking for space, null, or newline
-        value_end = value_start;
-        while (*value_end && *value_end != ' ' && *value_end != '\n' && *value_end != '\r') {
-            value_end++;
-        }
-        
-        // Extract and parse value
-        if (value_start[0] == '0' && (value_start[1] == 'x' || value_start[1] == 'X')) {
-            cmd->value = hex_string_to_uint8(value_start + 2);
-            cout << "Debug: Parsed value: " << std::hex << (int)cmd->value << std::dec << "\n";
-            
-            // For simple format, value and address are the same
-            cmd->address = hex_string_to_uint32(value_start + 2);
-            cout << "Debug: Simple format - using value as address: " << std::hex << cmd->address << std::dec << "\n";
-            return true;
-        } else {
-            cout << "Debug: Invalid value format in simple command\n";
-            return false;
-        }
-    }
-    
-    // Extract value (between first >> and second >>)
-    cout << "Debug: Value section: '";
-    for (const char* p = value_start; p < value_end && *p; p++) {
-        cout << *p;
-    }
-    cout << "'\n";
-    
-    if (value_start[0] == '0' && (value_start[1] == 'x' || value_start[1] == 'X')) {
-        cmd->value = hex_string_to_uint8(value_start + 2);
-        cout << "Debug: Parsed value: " << std::hex << (int)cmd->value << std::dec << "\n";
-    } else {
-        cout << "Debug: Invalid value format\n";
-        return false;
-    }
-    
-    // Extract address (after second >>)
-    const char* addr_start = value_end + 2;
-    while (*addr_start == ' ') addr_start++; // Skip spaces
-    
-    // Check for PCIe specification (third >>)
-    const char* third_arrow = my_strstr(addr_start, ">>");
-    const char* addr_end;
-    
-    if (third_arrow) {
-        addr_end = third_arrow;
-        cout << "Debug: Found third >>, PCIe write command detected\n";
-    } else {
-        // Find end of address (space, null, or newline)
-        addr_end = addr_start;
-        while (*addr_end && *addr_end != ' ' && *addr_end != '\n' && *addr_end != '\r') {
-            addr_end++;
-        }
-        cout << "Debug: No third >>, memory write command\n";
-    }
-    
-    cout << "Debug: Address section: '";
-    for (const char* p = addr_start; p < addr_end && *p; p++) {
-        cout << *p;
-    }
-    cout << "'\n";
-    
-    if (addr_start[0] == '0' && (addr_start[1] == 'x' || addr_start[1] == 'X')) {
-        cmd->address = hex_string_to_uint32(addr_start + 2);
-        cout << "Debug: Parsed address: " << std::hex << cmd->address << std::dec << "\n";
-    } else {
-        cout << "Debug: Invalid address format\n";
-        return false;
-    }
-    
-    // Handle PCIe specification if present
-    if (third_arrow) {
-        if (!parse_pcie_specification(third_arrow + 2, cmd)) {
-            return false;
-        }
-    }
-    
-    cout << "Debug: Write command parsed successfully\n";
-    return true;
-}
-
-// Helper function to parse PCIe specification
-bool parse_pcie_specification(const char* pcie_start, DriverCommand* cmd) {
-    while (*pcie_start == ' ') pcie_start++; // Skip spaces
-    
-    cout << "Debug: PCIe section: '";
-    for (int i = 0; i < 20 && pcie_start[i] && pcie_start[i] != '\n'; i++) {
-        cout << pcie_start[i];
-    }
-    cout << "'\n";
-    
-    if (my_strncmp(pcie_start, "pcie:", 5) == 0) {
-        cmd->use_pcie = true;
-        const char* pcie_spec = pcie_start + 5;
-        
-        // Parse bus:device:function:offset format
-        char temp_str[16];
-        int field = 0;
-        int pos = 0;
-        
-        for (int i = 0; pcie_spec[i] != '\0' && pcie_spec[i] != '\n' && pcie_spec[i] != '\r' && field <= 3; i++) {
-            if (pcie_spec[i] == ':' || (field == 3 && (pcie_spec[i] == ' ' || pcie_spec[i] == '\0'))) {
-                temp_str[pos] = '\0';
-                
-                switch (field) {
-                    case 0:
-                        cmd->bus = (uint8_t)hex_string_to_uint32(temp_str);
-                        cout << "Debug: Parsed bus: " << (int)cmd->bus << "\n";
-                        break;
-                    case 1:
-                        cmd->device = (uint8_t)hex_string_to_uint32(temp_str);
-                        cout << "Debug: Parsed device: " << (int)cmd->device << "\n";
-                        break;
-                    case 2:
-                        cmd->function = (uint8_t)hex_string_to_uint32(temp_str);
-                        cout << "Debug: Parsed function: " << (int)cmd->function << "\n";
-                        break;
-                    case 3:
-                        cmd->offset = (uint16_t)hex_string_to_uint32(temp_str);
-                        cout << "Debug: Parsed offset: " << std::hex << cmd->offset << std::dec << "\n";
-                        break;
-                }
-                field++;
-                pos = 0;
-                
-                if (pcie_spec[i] == ' ' || pcie_spec[i] == '\0') break;
-            } else if (pos < 15) {
-                temp_str[pos++] = pcie_spec[i];
-            }
-        }
-        
-        // Handle last field if we ended without a delimiter
-        if (field == 3 && pos > 0) {
-            temp_str[pos] = '\0';
-            cmd->offset = (uint16_t)hex_string_to_uint32(temp_str);
-            cout << "Debug: Parsed offset (final): " << std::hex << cmd->offset << std::dec << "\n";
-        }
-        
-        return true;
-    }
-    
-    cout << "Debug: Invalid PCIe specification format\n";
-    return false;
-}
-
-uint32_t pcie_config_read32(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset) {
-    uint32_t address = (1U << 31) | ((uint32_t)bus << 16) | ((uint32_t)device << 11) | 
-                       ((uint32_t)function << 8) | (offset & 0xFC);
-    
-    outl(PCIE_CONFIG_ADDRESS, address);
-    return inl(PCIE_CONFIG_DATA);
-}
-
-uint16_t pcie_config_read16(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset) {
-    uint32_t address = (1U << 31) | ((uint32_t)bus << 16) | ((uint32_t)device << 11) | 
-                       ((uint32_t)function << 8) | (offset & 0xFC);
-    
-    outl(PCIE_CONFIG_ADDRESS, address);
-    return inw(PCIE_CONFIG_DATA + (offset & 2));
-}
-
-uint8_t pcie_config_read8(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset) {
-    uint32_t address = (1U << 31) | ((uint32_t)bus << 16) | ((uint32_t)device << 11) | 
-                       ((uint32_t)function << 8) | (offset & 0xFC);
-    
-    outl(PCIE_CONFIG_ADDRESS, address);
-    return inb(PCIE_CONFIG_DATA + (offset & 3));
-}
-
-void pcie_config_write32(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset, uint32_t value) {
-    uint32_t address = (1U << 31) | ((uint32_t)bus << 16) | ((uint32_t)device << 11) | 
-                       ((uint32_t)function << 8) | (offset & 0xFC);
-    
-    outl(PCIE_CONFIG_ADDRESS, address);
-    outl(PCIE_CONFIG_DATA, value);
-}
-
-void pcie_config_write16(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset, uint16_t value) {
-    uint32_t address = (1U << 31) | ((uint32_t)bus << 16) | ((uint32_t)device << 11) | 
-                       ((uint32_t)function << 8) | (offset & 0xFC);
-    
-    outl(PCIE_CONFIG_ADDRESS, address);
-    outw(PCIE_CONFIG_DATA + (offset & 2), value);
-}
-
-void pcie_config_write8(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset, uint8_t value) {
-    uint32_t address = (1U << 31) | ((uint32_t)bus << 16) | ((uint32_t)device << 11) | 
-                       ((uint32_t)function << 8) | (offset & 0xFC);
-    
-    outl(PCIE_CONFIG_ADDRESS, address);
-    outb(PCIE_CONFIG_DATA + (offset & 3), value);
-}
-
-bool pcie_device_exists(uint8_t bus, uint8_t device, uint8_t function) {
-    uint16_t vendor_id = pcie_config_read16(bus, device, function, PCIE_CONFIG_VENDOR_ID);
-    return (vendor_id != 0xFFFF && vendor_id != 0x0000);
-}
-
-void pcie_enable_device(uint8_t bus, uint8_t device, uint8_t function) {
-    uint16_t command = pcie_config_read16(bus, device, function, PCIE_CONFIG_COMMAND);
-    command |= PCIE_CMD_IO_ENABLE | PCIE_CMD_MEMORY_ENABLE | PCIE_CMD_BUS_MASTER;
-    pcie_config_write16(bus, device, function, PCIE_CONFIG_COMMAND, command);
-}
-
-void pcie_scan_devices() {
-    device_count = 0;
-    
-    for (uint16_t bus = 0; bus < 256 && device_count < 32; bus++) {
-        for (uint8_t device = 0; device < 32 && device_count < 32; device++) {
-            for (uint8_t function = 0; function < 8 && device_count < 32; function++) {
-                if (pcie_device_exists(bus, device, function)) {
-                    PCIeDevice* dev = &detected_devices[device_count];
-                    dev->bus = bus;
-                    dev->device = device;
-                    dev->function = function;
-                    dev->vendor_id = pcie_config_read16(bus, device, function, PCIE_CONFIG_VENDOR_ID);
-                    dev->device_id = pcie_config_read16(bus, device, function, PCIE_CONFIG_DEVICE_ID);
-                    dev->class_code = pcie_config_read32(bus, device, function, PCIE_CONFIG_CLASS_CODE);
-                    
-                    // Read BARs
-                    for (int i = 0; i < 6; i++) {
-                        dev->bar[i] = pcie_config_read32(bus, device, function, PCIE_CONFIG_BAR0 + (i * 4));
-                    }
-                    
-                    dev->valid = true;
-                    device_count++;
-                }
-            }
-        }
-    }
-}
-
-uint8_t driver_memory_read(uint32_t address) {
-    return *((volatile uint8_t*)address);
-}
-
-void driver_memory_write(uint32_t address, uint8_t value) {
-    *((volatile uint8_t*)address) = value;
-}
-
-uint8_t driver_pcie_read(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset) {
-    if (pcie_device_exists(bus, device, function)) {
-        return pcie_config_read8(bus, device, function, offset);
-    } else {
-        cout << "PCIe device " << (int)bus << ":" << (int)device << ":" << (int)function << " not found!\n";
-        return 0xFF;
-    }
-}
-
-void driver_pcie_write(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset, uint8_t value) {
-    if (pcie_device_exists(bus, device, function)) {
-        pcie_config_write8(bus, device, function, offset, value);
-    } else {
-        cout << "PCIe device " << (int)bus << ":" << (int)device << ":" << (int)function << " not found!\n";
-    }
-}
-
-void print_pcie_device_info(const PCIeDevice* dev) {
-    cout << "  Bus " << (int)dev->bus << ", Device " << (int)dev->device 
-         << ", Function " << (int)dev->function;
-    cout << " - Vendor: " << std::hex << dev->vendor_id 
-         << ", Device: " << dev->device_id;
-    cout << ", Class: " << (dev->class_code >> 8) << std::dec << "\n";
-}
-
-// Utility functions
-uint8_t hex_char_to_value(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return 0;
+// --- Hex Conversion Utility Functions (implement if not in header) ---
+uint8_t hex_char_to_value(char c){
+    if(c>='0'&&c<='9')return c-'0';
+    if(c>='a'&&c<='f')return c-'a'+10;
+    if(c>='A'&&c<='F')return c-'A'+10;
+    return 0xFF; // Return 0xFF for error
 }
 
 uint32_t hex_string_to_uint32(const char* hex_str) {
-    uint32_t result = 0;
-    for (int i = 0; hex_str[i] != '\0' && hex_str[i] != ' ' && hex_str[i] != '>' && hex_str[i] != ':'; i++) {
-        result = (result << 4) | hex_char_to_value(hex_str[i]);
-    }
-    return result;
+    uint32_t res=0; const char* p=hex_str; 
+    if(p[0]=='0'&&(p[1]=='x'||p[1]=='X'))p+=2;
+    while(*p){uint8_t val=hex_char_to_value(*p++);if(val==0xFF)break;res=(res<<4)|val;} 
+    return res;
 }
 
 uint8_t hex_string_to_uint8(const char* hex_str) {
-    uint8_t result = 0;
-    for (int i = 0; hex_str[i] != '\0' && hex_str[i] != ' ' && hex_str[i] != '>' && i < 2; i++) {
-        result = (result << 4) | hex_char_to_value(hex_str[i]);
-    }
-    return result;
+    uint8_t res=0; const char* p=hex_str; 
+    if(p[0]=='0'&&(p[1]=='x'||p[1]=='X'))p+=2;
+    for(int i=0;i<2&&*p;i++){uint8_t val=hex_char_to_value(*p++);if(val==0xFF)break;res=(res<<4)|val;} 
+    return res;
+}
+// Fixed PCIe Configuration Space Access Functions
+// The CF8/CFC method requires 32-bit aligned reads, then extract the needed bytes
+
+uint32_t pcie_config_read32(uint8_t b, uint8_t d, uint8_t f, uint16_t o) {
+    uint32_t a = (1U << 31) | ((uint32_t)b << 16) | ((uint32_t)d << 11) | ((uint32_t)f << 8) | (o & 0xFCU);
+    outl(PCIE_CONFIG_ADDRESS, a);
+    return inl(PCIE_CONFIG_DATA);
 }
 
+uint16_t pcie_config_read16(uint8_t b, uint8_t d, uint8_t f, uint16_t o) {
+    // Read the 32-bit value and extract the 16-bit portion
+    uint32_t val32 = pcie_config_read32(b, d, f, o & 0xFC);
+    uint8_t byte_offset = o & 0x03;
+    return (val32 >> (byte_offset * 8)) & 0xFFFF;
+}
 
+uint8_t pcie_config_read8(uint8_t b, uint8_t d, uint8_t f, uint16_t o) {
+    // Read the 32-bit value and extract the 8-bit portion
+    uint32_t val32 = pcie_config_read32(b, d, f, o & 0xFC);
+    uint8_t byte_offset = o & 0x03;
+    return (val32 >> (byte_offset * 8)) & 0xFF;
+}
 
+void pcie_config_write32(uint8_t b, uint8_t d, uint8_t f, uint16_t o, uint32_t v) {
+    uint32_t a = (1U << 31) | ((uint32_t)b << 16) | ((uint32_t)d << 11) | ((uint32_t)f << 8) | (o & 0xFCU);
+    outl(PCIE_CONFIG_ADDRESS, a);
+    outl(PCIE_CONFIG_DATA, v);
+}
 
-void driver_cfg(char* input) {
+void pcie_config_write16(uint8_t b, uint8_t d, uint8_t f, uint16_t o, uint16_t v) {
+    // Read-modify-write for 16-bit values
+    uint32_t val32 = pcie_config_read32(b, d, f, o & 0xFC);
+    uint8_t byte_offset = o & 0x03;
+    uint32_t mask = 0xFFFF << (byte_offset * 8);
+    val32 = (val32 & ~mask) | ((uint32_t)v << (byte_offset * 8));
+    pcie_config_write32(b, d, f, o & 0xFC, val32);
+}
 
-    DriverCommand cmd;
+void pcie_config_write8(uint8_t b, uint8_t d, uint8_t f, uint16_t o, uint8_t v) {
+    // Read-modify-write for 8-bit values
+    uint32_t val32 = pcie_config_read32(b, d, f, o & 0xFC);
+    uint8_t byte_offset = o & 0x03;
+    uint32_t mask = 0xFF << (byte_offset * 8);
+    val32 = (val32 & ~mask) | ((uint32_t)v << (byte_offset * 8));
+    pcie_config_write32(b, d, f, o & 0xFC, val32);
+}
+
+// --- PCIe Device Utility Functions ---
+bool pcie_device_exists(uint8_t b,uint8_t d,uint8_t f){
+    uint16_t vid=pcie_config_read16(b,d,f,PCIE_CONFIG_VENDOR_ID);
+    return(vid!=0xFFFF&&vid!=0x0000);
+}
+
+void print_pcie_device_info(const PCIeDevice* dev){
+    if(!dev||!dev->valid)return;
+    cout<<"  B"<<(int)dev->bus<<":D"<<(int)dev->device<<":F"<<(int)dev->function
+        <<" VID:"<<std::hex<<dev->vendor_id<<" DID:"<<dev->device_id;
     
+    // Use class_code instead of class_code_full
+    uint8_t cc=(dev->class_code>>16)&0xFF;
+    uint8_t sc=(dev->class_code>>8)&0xFF;
+    uint8_t pi=(dev->class_code)&0xFF;
     
-    // Check for list command
-    if (my_strstr(input, "list") != nullptr) {
-        cout << "Detected PCIe devices:\n";
-        for (int i = 0; i < device_count; i++) {
-            print_pcie_device_info(&detected_devices[i]);
-        }
-        return;
-    }
-    
-    cout << "Debug: Received command: " << input << "\n";
-    
-    if (parse_driver_command(input, &cmd)) {
-        if (cmd.is_read) {
-            // Handle read operations
-            if (cmd.use_pcie) {
-                cout << "Reading from PCIe device " << (int)cmd.bus << ":" << (int)cmd.device 
-                     << ":" << (int)cmd.function << " offset " << std::hex << cmd.offset << std::dec << "\n";
-                uint8_t read_value = driver_pcie_read(cmd.bus, cmd.device, cmd.function, cmd.offset);
-                cout << "Read value: " << std::hex << (int)read_value << std::dec << "\n";
-            } else {
-                cout << "Reading from memory address " << std::hex << cmd.address << std::dec << "\n";
-                uint8_t read_value = driver_memory_read(cmd.address);
-                cout << "Read value: " << std::hex << (int)read_value << std::dec << "\n";
+    cout<<" Cls:"<<(int)cc<<" Sub:"<<(int)sc<<" PI:"<<(int)pi<<std::dec<<"\n";
+}
+
+// --- PCIe Scan Function ---
+void pcie_scan_devices(){
+    device_count=0;
+    for(uint16_t b=0;b<256&&device_count<32;b++){
+        for(uint8_t d=0;d<32&&device_count<32;d++){
+            if(!pcie_device_exists(b,d,0))continue;
+            uint8_t ht=pcie_config_read8(b,d,0,PCIE_CONFIG_HEADER_TYPE);
+            uint8_t max_f=(ht&0x80)?8:1;
+            
+            for(uint8_t f=0;f<max_f&&device_count<32;f++){
+                if(pcie_device_exists(b,d,f)){
+                    PCIeDevice* dv=&detected_devices[device_count];
+                    dv->bus=b;dv->device=d;dv->function=f;
+                    dv->vendor_id=pcie_config_read16(b,d,f,PCIE_CONFIG_VENDOR_ID);
+                    dv->device_id=pcie_config_read16(b,d,f,PCIE_CONFIG_DEVICE_ID);
+                    
+                    // Read class code (use class_code member, not class_code_full)
+                    uint32_t class_rev = pcie_config_read32(b,d,f,PCIE_CONFIG_CLASS_REV);
+                    dv->class_code = (class_rev >> 8) & 0xFFFFFF; // Extract 24-bit class code
+                    
+                    // Store header type in a temporary variable since struct doesn't have it
+                    uint8_t header_type = pcie_config_read8(b,d,f,PCIE_CONFIG_HEADER_TYPE);
+                    
+                    // Read BARs based on header type
+                    int nbar=6;
+                    if((header_type&0x7F)==1)nbar=2;
+                    else if((header_type&0x7F)==2)nbar=1;
+                    
+                    for(int i=0;i<6;i++)dv->bar[i]=0;
+                    for(int i=0;i<nbar;i++)
+                        dv->bar[i]=pcie_config_read32(b,d,f,PCIE_CONFIG_BAR0+(i*4));
+                    
+                    dv->valid=true;
+                    device_count++;
+                }
+                if(f==0&&!(ht&0x80))break;
             }
+        }
+    }
+}
+
+// --- Driver Core Read/Write Functions ---
+uint8_t driver_memory_read(uint32_t a){return *((volatile uint8_t*)a);}
+void driver_memory_write(uint32_t a,uint8_t v){*((volatile uint8_t*)a)=v;}
+
+uint8_t driver_pcie_read(uint8_t b,uint8_t d,uint8_t f,uint16_t o){
+    if(pcie_device_exists(b,d,f))return pcie_config_read8(b,d,f,o);
+    cout<<"PCIe Read Err: Dev "<<(int)b<<":"<<(int)d<<":"<<(int)f<<" not found!\n";
+    return 0xFF;
+}
+
+void driver_pcie_write(uint8_t b,uint8_t d,uint8_t f,uint16_t o,uint8_t v){
+    if(pcie_device_exists(b,d,f))pcie_config_write8(b,d,f,o,v);
+    else cout<<"PCIe Write Err: Dev "<<(int)b<<":"<<(int)d<<":"<<(int)f<<" not found!\n";
+}
+
+// --- Command Execution Helper ---
+static bool execute_parsed_driver_command(const DriverCommand* cmd, uint8_t* out_read_val, bool* was_read_op) {
+    if (!cmd || !out_read_val || !was_read_op) return false;
+    *was_read_op = false; *out_read_val = 0;
+
+    if (cmd->is_read) {
+        *was_read_op = true;
+        if (cmd->use_pcie) {
+            cout << "  Exec: Read PCIe " << (int)cmd->bus << ":" << (int)cmd->device << ":" << (int)cmd->function << "@" << std::hex << cmd->offset << std::dec;
+            *out_read_val = driver_pcie_read(cmd->bus, cmd->device, cmd->function, cmd->offset);
+            cout << " -> Val:" << std::hex << (int)(*out_read_val) << std::dec << "\n";
         } else {
-            // Handle write operations
-            if (cmd.use_pcie) {
-                cout << "Writing " << std::hex << (int)cmd.value 
-                     << " to PCIe device " << (int)cmd.bus << ":" << (int)cmd.device 
-                     << ":" << (int)cmd.function << " offset " << cmd.offset << std::dec << "\n";
-                driver_pcie_write(cmd.bus, cmd.device, cmd.function, cmd.offset, cmd.value);
-            } else {
-                cout << "Writing " << std::hex << (int)cmd.value 
-                     << " to memory address " << cmd.address << std::dec << "\n";
-                driver_memory_write(cmd.address, cmd.value);
+            cout << "  Exec: Read Mem @" << std::hex << cmd->address << std::dec;
+            *out_read_val = driver_memory_read(cmd->address);
+            cout << " -> Val:" << std::hex << (int)(*out_read_val) << std::dec << "\n";
+        }
+        return true; // Read attempted
+    } else { // Write
+        if (cmd->use_pcie) {
+            cout << "  Exec: Write " << std::hex << (int)cmd->value << std::dec << " to PCIe " << (int)cmd->bus << ":" << (int)cmd->device << ":" << (int)cmd->function << "@" << std::hex << cmd->offset << std::dec << "\n";
+            driver_pcie_write(cmd->bus, cmd->device, cmd->function, cmd->offset, cmd->value);
+        } else {
+            cout << "  Exec: Write " << std::hex << (int)cmd->value << std::dec << " to Mem @" << std::hex << cmd->address << std::dec << "\n";
+            driver_memory_write(cmd->address, cmd->value);
+        }
+        return true; // Write attempted
+    }
+    return false; // Should not be reached
+}
+
+// --- Command Parsing Functions ---
+static bool parse_pcie_specification(const char* pcie_start_param, DriverCommand* cmd) {
+    const char* pcie_start = pcie_start_param;
+    while (*pcie_start == ' ') pcie_start++;
+    if (my_strncmp(pcie_start, "pcie:", 5) == 0) {
+        cmd->use_pcie = true; const char* p = pcie_start + 5; uint32_t parts[4]; int part_idx = 0;
+        const char* seg_start = p;
+        for (;; p++) {
+            if (*p == ':' || *p == '\0' || *p == ' ') {
+                if (p > seg_start) { 
+                    char temp_buf[12]; size_t len = p - seg_start; 
+                    if(len >= sizeof(temp_buf)) return false; 
+                    for(size_t k=0;k<len;k++)temp_buf[k]=seg_start[k];
+                    temp_buf[len]='\0'; 
+                    parts[part_idx++] = hex_string_to_uint32(temp_buf); 
+                }
+                if (*p == '\0' || *p == ' ' || part_idx == 4) break;
+                seg_start = p + 1; 
+                if (part_idx == 4 && *p == ':') return false; // Too many colons
+            } else if (!((*p>='0'&&*p<='9')||(*p>='a'&&*p<='f')||(*p>='A'&&*p<='F')||(*p=='x'||*p=='X'))) return false; // Invalid char
+        }
+        if (part_idx == 4) { 
+            cmd->bus=(uint8_t)parts[0]; 
+            cmd->device=(uint8_t)parts[1]; 
+            cmd->function=(uint8_t)parts[2]; 
+            cmd->offset=(uint16_t)parts[3]; 
+            return true; 
+        }
+    }
+    return false;
+}
+
+bool parse_driver_command(const char* input_param, DriverCommand* cmd) {
+    const char* input = input_param;
+    cmd->use_pcie=false; cmd->is_read=false; cmd->value=0; cmd->address=0; cmd->bus=0; cmd->device=0; cmd->function=0; cmd->offset=0;
+
+    const char* cur = my_strstr(input, "driver"); if (!cur) return false; cur += 6;
+    cur = my_strstr(cur, ">>"); if (!cur) return false; cur += 2; while (*cur == ' ') cur++;
+
+    char p1[32]; const char* p1e = cur; while(*p1e && *p1e != ' ') p1e++; size_t p1l = p1e - cur;
+    if (p1l==0||p1l>=sizeof(p1)) return false; for(size_t i=0;i<p1l;i++)p1[i]=cur[i]; p1[p1l]='\0';
+
+    if (my_strncmp(p1, "read", 4) == 0 && p1[4]=='\0') cmd->is_read = true;
+    else cmd->value = hex_string_to_uint8(p1);
+    cur = p1e; while (*cur == ' ') cur++;
+
+    if (my_strncmp(cur, ">>", 2)!=0) return false; cur += 2; while (*cur == ' ') cur++;
+
+    char p3[32]; const char* p3e = cur; while(*p3e && *p3e != ' ') p3e++; size_t p3l = p3e - cur;
+    if (p3l==0||p3l>=sizeof(p3)) return false; for(size_t i=0;i<p3l;i++)p3[i]=cur[i]; p3[p3l]='\0';
+    cmd->address = hex_string_to_uint32(p3); // This address might be ignored for PCIe if BDFO is present
+    cur = p3e; while (*cur == ' ') cur++;
+
+    if (my_strncmp(cur, ">>", 2) == 0) {
+        cur += 2; while (*cur == ' ') cur++;
+        if (!parse_pcie_specification(cur, cmd)) return false;
+    } else if (*cur != '\0') { /* Trailing chars? */ }
+    return true;
+}
+
+// --- Multi-Command String Processor ---
+static void process_multi_command_string(const char* multi_cmd_string,
+                                  uint8_t* read_values_buffer, 
+                                  int buffer_capacity,          
+                                  int* actual_reads_count) {    
+    const char* current_cmd_start = multi_cmd_string;
+    char single_cmd_buf[256];
+    if (actual_reads_count) *actual_reads_count = 0;
+
+    if (!multi_cmd_string || !read_values_buffer || !actual_reads_count) return;
+
+    while (*current_cmd_start) {
+        while (*current_cmd_start == ' ' || *current_cmd_start == '\t' || *current_cmd_start == ';') {
+            if (*current_cmd_start == '\0') break; current_cmd_start++;
+        }
+        if (!*current_cmd_start) break;
+
+        const char* next_separator = current_cmd_start;
+        while (*next_separator != '\0' && *next_separator != ';') next_separator++;
+        size_t cmd_len = next_separator - current_cmd_start;
+        while (cmd_len > 0 && (current_cmd_start[cmd_len-1]==' '||current_cmd_start[cmd_len-1]=='\t')) cmd_len--;
+
+        if (cmd_len > 0 && cmd_len < sizeof(single_cmd_buf)) {
+            for(size_t i=0;i<cmd_len;i++) single_cmd_buf[i]=current_cmd_start[i]; 
+            single_cmd_buf[cmd_len]='\0';
+
+            if (single_cmd_buf[0] != '\0') {
+                const char* list_check_ptr=single_cmd_buf; bool is_list=false;
+                if(my_strstr(list_check_ptr,"driver")==list_check_ptr){
+                    list_check_ptr=my_strstr(list_check_ptr,">>");
+                    if(list_check_ptr){
+                        list_check_ptr+=2;while(*list_check_ptr==' ')list_check_ptr++;
+                        if(my_strncmp(list_check_ptr,"list",4)==0&&(list_check_ptr[4]=='\0'||list_check_ptr[4]==' '))
+                            is_list=true;
+                    }
+                }
+                
+                if(is_list){
+                    cout<<"Detected PCIe devices:\n";
+                    for(int i=0;i<device_count;i++)print_pcie_device_info(&detected_devices[i]);
+                } else {
+                    DriverCommand cmd;
+                    if (parse_driver_command(single_cmd_buf, &cmd)) {
+                        uint8_t temp_val; bool was_read;
+                        execute_parsed_driver_command(&cmd, &temp_val, &was_read);
+                        if (was_read && *actual_reads_count < buffer_capacity) {
+                            read_values_buffer[*actual_reads_count] = temp_val;
+                            (*actual_reads_count)++;
+                        }
+                    } else { 
+                        cout << "Error: Failed to parse segment: \"" << single_cmd_buf << "\"\n"; 
+                    }
+                }
             }
         }
-        cout << "Driver command executed successfully.\n";
-    } else {
-        cout << "Invalid driver command format.\n";
-        cout << "Examples:\n";
-        cout << "  Write: driver >> 0xFF >> 0x1000\n";
-        cout << "  Read:  driver >> read >> 0x1000\n";
-        cout << "  PCIe:  driver >> 0xFF >> 0x1000 >> pcie:0:1:0:10\n";
+        if (*next_separator == ';') current_cmd_start = next_separator + 1;
+        else break;
     }
 }
 
+// --- Script Execution Function ---
+void execute_driver_script_from_buffer(const char* script_buffer) {
+    if (!script_buffer) { cout << "Script Error: null buffer.\n"; return; }
+    const char* line_start = script_buffer;
+    char line_buf[256];
+    uint8_t line_read_values[MAX_RETURNED_READ_VALUES]; 
+    int line_num_reads;
+
+    cout << "Executing script...\n";
+    while (*line_start) {
+        const char* line_end = line_start;
+        while (*line_end != '\0' && *line_end != '\n' && *line_end != '\r') line_end++;
+        size_t line_len = line_end - line_start;
+
+        if (line_len < sizeof(line_buf)) {
+            safe_strncpy_line(line_buf, line_start, line_len + 1);
+            char* trimmed = line_buf; 
+            while(*trimmed==' '||*trimmed=='\t')trimmed++;
+            if (*trimmed != '\0' && *trimmed != '#') {
+                process_multi_command_string(trimmed, line_read_values, MAX_RETURNED_READ_VALUES, &line_num_reads);
+                if (line_num_reads > 0) {
+                    cout << "  Values read from this line: ";
+                    for (int i = 0; i < line_num_reads; i++) {
+                        cout << "" << std::hex << (int)line_read_values[i] << std::dec << (i == line_num_reads - 1 ? "" : ", ");
+                    }
+                    cout << "\n";
+                }
+            }
+        } else if (line_len > 0) { 
+            cout << "Script Warning: Line too long, skipping.\n"; 
+        }
+        if (*line_end == '\0') break;
+        line_start = line_end + 1;
+    }
+    cout << "Script execution finished.\n";
+}
+
+// --- Main Command Handlers ---
+void driver_cfg(char* input_command_string, 
+                bool* overall_parsing_success, 
+                uint8_t* out_read_values_array, 
+                int buffer_capacity, 
+                int* num_values_read_actual) {
+    if(overall_parsing_success) *overall_parsing_success = true; 
+    if(num_values_read_actual) *num_values_read_actual = 0;
+
+    process_multi_command_string(input_command_string, 
+                                 out_read_values_array, 
+                                 buffer_capacity, 
+                                 num_values_read_actual);
+}
+
+
+// --- Initialization Function ---
+void init_pcie_driver() {
+    cout << "Initializing PCIe Driver...\n";
+    device_count = 0;
+    for (int i = 0; i < 32; i++) detected_devices[i].valid = false;
+    pcie_scan_devices();
+    cout << "PCIe Driver initialized. Found " << device_count << " PCIe function(s).\n";
+}

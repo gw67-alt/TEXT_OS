@@ -167,10 +167,13 @@ void command_prompt() {
             cmd_read_memory();
         } else if (cmd == "writemem") {
             cmd_write_memory();
-        } else if (cmd == "driver") {
-            cmd_driver();  // Add the new driver command
         } else if (cmd == "dcfgtest") {
-            driver_cfg("driver >> 0xFF >> 0xFF >> pcie:0:0:0:0");  // Add the new driver command
+            bool success;
+            uint8_t dummy_reads[16];
+            int num_reads;
+            cout << "Formats: driver >> [list | read | 0xVALUE] >> 0xADDRESS [>> pcie:B:D:F:O]\n";
+            driver_cfg("driver >> 0xFF >> 0xFF >> pcie:0:0:0:0;driver >> read >> 0x55 >> pcie:0:1:0:0;driver >> 0xFF >> 0xFF >> pcie:0:0:0:0", &success, dummy_reads, 16, &num_reads);
+
         }
         else {
             cout << "Unknown command: " << input << "\n";

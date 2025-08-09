@@ -1,9 +1,6 @@
 #include "interrupts.h"
 #include "terminal_hooks.h"
 #include "iostream_wrapper.h"
-#ifndef MAX_COMMAND_LENGTH
-#define MAX_COMMAND_LENGTH 256
-#endif
 
 // IDT and GDT structures
 struct idt_entry idt[256];
@@ -11,19 +8,6 @@ struct idt_ptr idtp;
 struct gdt_entry gdt[3];
 struct gdt_ptr gdtp;
 
-
-// Keyboard input buffer and state variables (static to this file)
-static bool shift_pressed = false; // Tracks if a shift key is currently pressed
-
-// Scancodes for Shift keys (PS/2 Scan Code Set 1/2 Make codes)
-#define SCANCODE_LSHIFT_PRESS   0x2A
-#define SCANCODE_LSHIFT_RELEASE 0xAA
-#define SCANCODE_RSHIFT_PRESS   0x36
-#define SCANCODE_RSHIFT_RELEASE 0xB6
-
-// Scancodes for UP/DOWN arrows (example, ensure these are correct for your setup)
-#define SCANCODE_UP   0x48  // Common code after E0 prefix
-#define SCANCODE_DOWN 0x50  // Common code after E0 prefix
 // Keyboard scancode tables
 const char scancode_to_ascii[128] = {
     0, 0, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
@@ -34,22 +18,6 @@ const char scancode_to_ascii[128] = {
     0, 0, 0, '+', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
-// New scancode table for shifted characters
-const char scancode_to_ascii_shifted[128] = {
-    0,    0,  '!',  '@',  '#',  '$',  '%',  '^',  '&',  '*',  /* 0-9 */
-    '(',  ')',  '_',  '+', '\b', '\t', 'Q',  'W',  'E',  'R',  /* 10-19 */
-    'T',  'Y',  'U',  'I',  'O',  'P',  '{',  '}', '\n',   0,  /* 20-29 */
-    'A',  'S',  'D',  'F',  'G',  'H',  'J',  'K',  'L',  ':',  /* 30-39 */
-    '"',  '~',    0,  '|',  'Z',  'X',  'C',  'V',  'B',  'N',  /* 40-49 */
-    'M',  '<',  '>',  '?',    0,  '*',    0,  ' ',    0,    0,  /* 50-59 (Numpad * , Space) */
-    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,  /* 60-69 F-keys etc. */
-    0,    0,    0,    0,  '-',    0,    0,    0,  '+',    0,  /* 70-79 (Numpad -, Numpad +) */
-    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,  /* 80-89 */
-    // ... (fill remaining with 0 or appropriate shifted chars for other keys if needed) ...
-    // Fill up to 127 with 0
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 90-109 */
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0      /* 110-127 */
-};
 const char extended_scancode_table[128] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '\n', 0, 0, 0,
@@ -61,99 +29,76 @@ const char extended_scancode_table[128] = {
 
 /* Keyboard interrupt handler */
 extern "C" void keyboard_handler() {
+    /* Read scancode from keyboard data port */
     uint8_t scancode = inb(0x60);
 
-    // 1. Handle 0xE0 prefix for extended keys
+    /* Check for extended key code (0xE0) */
     if (scancode == 0xE0) {
-        extended_key = true; // Set flag for the *next* scancode
-        outb(0x20, 0x20);    // Send EOI to PIC
+        extended_key = true;
+        /* Send EOI to PIC */
+        outb(0x20, 0x20);
         return;
     }
 
-    // 2. Handle Modifier Key States (Shift)
-    if (scancode == SCANCODE_LSHIFT_PRESS || scancode == SCANCODE_RSHIFT_PRESS) {
-        shift_pressed = true;
-        outb(0x20, 0x20); // Send EOI
-        return;
-    }
-    if (scancode == SCANCODE_LSHIFT_RELEASE || scancode == SCANCODE_RSHIFT_RELEASE) {
-        shift_pressed = false;
-        outb(0x20, 0x20); // Send EOI
-        return;
-    }
-    // (Future: Add Ctrl/Alt state handling here if needed)
-
-    // 3. Handle Key Release for non-modifier keys
-    // If it's a release code (top bit set) and not a Shift release (already handled).
+    /* Handle key release (bit 7 set) */
     if (scancode & 0x80) {
-        if (extended_key) {
-            // This is the release of an extended key (e.g., E0 followed by make_code + 0x80).
-            // We don't typically "type" anything on release of arrow keys, etc.
-            // The make code of the extended key would have already reset extended_key.
-            // Or, if this is an unexpected E0 sequence (e.g. E0 then release of normal key),
-            // resetting extended_key here is a safeguard.
-            extended_key = false; 
-        }
-        // For any other non-modifier key release, just send EOI.
-        outb(0x20, 0x20); // Send EOI
+        /* Reset extended key flag if it was set */
+        extended_key = false;
+        /* Send EOI to PIC */
+        outb(0x20, 0x20);
         return;
     }
 
-    // 4. Handle Make Codes for Extended Keys (if `extended_key` is true)
-    // At this point, `scancode` is a make code, and `extended_key` might be true.
+    // Handle special keys for extended keyboard sequences
     if (extended_key) {
-        // `scancode` is the actual key code following the 0xE0 prefix.
-        // The top bit of `scancode` should NOT be set if it's a make code here.
         switch (scancode) {
-            case SCANCODE_UP:
-                // cin.navigateHistory(true); // Uncomment if history navigation is desired
+            case SCANCODE_UP: // Up arrow
+                // Access the global cin object and use history navigation
+                //cin.navigateHistory(true);
                 break;
-            case SCANCODE_DOWN:
-                // cin.navigateHistory(false); // Uncomment if history navigation is desired
+                
+            case SCANCODE_DOWN: // Down arrow
+                // Access the global cin object and use history navigation
+                //cin.navigateHistory(false);
                 break;
-            // Handle other extended keys if necessary.
-            // char ext_char = extended_scancode_table[scancode]; // Original had this table.
-            // if (ext_char == '\n') { /* ... process like enter ... */ }
         }
-        extended_key = false; // IMPORTANT: Reset after processing the *make code* of the extended key.
-        outb(0x20, 0x20);     // Send EOI
+        
+        // Reset extended key flag
+        extended_key = false;
+        
+        /* Send EOI to PIC */
+        outb(0x20, 0x20);
         return;
     }
 
-    // 5. Handle Make Codes for Normal Keys (non-extended, non-modifier make codes)
-    // At this point, `scancode` is a make code for a normal key, and `extended_key` is false.
-    char key_to_process;
-    if (shift_pressed) {
-        if (scancode < 128) key_to_process = scancode_to_ascii_shifted[scancode];
-        else key_to_process = 0; // Invalid scancode index
-    } else {
-        if (scancode < 128) key_to_process = scancode_to_ascii[scancode];
-        else key_to_process = 0; // Invalid scancode index
-    }
+    /* Normal input handling */
+    char key = scancode_to_ascii[scancode];
+    if (key != 0) {
+        if (key == '\n') {
+            // Enter key - process command
+            terminal_putchar(key);
+            input_buffer[input_length] = '\0';
 
-    if (key_to_process != 0) { // If it's a printable character or \n, \b, \t
-        if (key_to_process == '\n') {
-            terminal_putchar(key_to_process);      // Display newline
-            input_buffer[input_length] = '\0'; // Null-terminate the command
-
-            // Notify TerminalInput about the command (assuming 'cin' is the global TerminalInput instance)
+            // Notify TerminalInput about the command
             cin.setInputReady(input_buffer);
 
-            input_length = 0; // Reset for the next command
-            // No need to clear input_buffer here as setInputReady copies it.
-        } else if (key_to_process == '\b') { // Handle backspace
+            // Reset for next command
+            input_length = 0;
+        } else if (key == '\b') {
+            // Backspace - delete last character
             if (input_length > 0) {
+                terminal_putchar(key);
                 input_length--;
-                // input_buffer[input_length] = '\0'; // Buffer content updated
-                terminal_putchar(key_to_process);   // Tell terminal to visually backspace
             }
-        } else if (input_length < (MAX_COMMAND_LENGTH - 1)) { // Check buffer space (leave 1 for null)
-            input_buffer[input_length++] = key_to_process;
-            terminal_putchar(key_to_process); // Display the character
+        } else if (input_length < MAX_COMMAND_LENGTH - 1) {
+            // Regular character - add to buffer and display
+            input_buffer[input_length++] = key;
+            terminal_putchar(key);
         }
     }
 
-    outb(0x20, 0x20); // Send EOI to PIC
+    /* Send EOI to PIC */
+    outb(0x20, 0x20);
 }
 
 /* Timer interrupt handler */

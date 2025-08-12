@@ -1,6 +1,7 @@
-cin >> input, acts as getline, perhaps an oversimplification...
+cin >> input, acts as getline for char[n], perhaps an oversimplification...
 
 limitations are: cin cannot directly accept int, use atoi
 
+TODO: add FAT32
 
-implement 64bit cout with hex, do DMA memory editing program and filesystem driver.
+

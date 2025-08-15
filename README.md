@@ -4,6 +4,6 @@ limitations are: cin cannot directly accept int, use atoi
 
 TODO: fix FAT32
 
-potential redesign: HW-VGA-HDD-KB Set theory
+potential redesign: HW-VGA-HDD-KB Set theory and logic gates
 
 
